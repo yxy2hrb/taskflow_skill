@@ -845,9 +845,16 @@ function placeholderFrameHasCompleteBbox(sectionHtml, offset) {
 }
 
 function keepPlaceholdersForState(state, componentCodegen) {
+  // Anchors that are ALSO update targets are rendered (at their new bbox) by the
+  // runtime card-update mount; emitting a plain keep placeholder here would draw
+  // a second copy at the ORIGINAL position, so exclude them.
+  const updatedIds = new Set((state.inheritance?.update || [])
+    .map((patch) => patch?.id || patch?.name)
+    .filter(Boolean));
   return (state.inheritance?.keep || [])
     .filter((anchor) => {
       if (typeof anchor !== "string") return false;
+      if (updatedIds.has(anchor)) return false;
       const record = latestComponentRecord(componentCodegen, anchor, state.id);
       return !record || !isTopLevelComponentRecord(record);
     })
@@ -899,8 +906,14 @@ function expectedKeepAnchorsForState(state, componentCodegen, registry) {
   }
   const fullScreenReplace = isSelfHeaderReplacementState(state, componentCodegen);
   const systemTop = fullScreenReplace ? new Set(statusKeepAnchors(registry)) : null;
+  // Update targets own their own (moved) render via the runtime card-update
+  // mount; keeping them here too would duplicate the card at its old position.
+  const updatedIds = new Set((state.inheritance?.update || [])
+    .map((patch) => patch?.id || patch?.name)
+    .filter(Boolean));
   for (const anchor of state.inheritance?.keep || []) {
     if (typeof anchor !== "string") continue;
+    if (updatedIds.has(anchor)) continue;
     if (isSystemBottomKeepAnchor(anchor, registry)) continue;
     const record = latestComponentRecord(componentCodegen, anchor, state.id);
     if (record && isTopLevelComponentRecord(record)) continue;
@@ -1599,8 +1612,15 @@ function tfMountUpdatedOriginalCards(layer){
     const anchor=patch&&(patch.id||patch.name);
     const entry=anchor&&registry[anchor];
     if(!entry) return;
+    const sel=String(anchor).replace(/"/g,'\\"');
     // codegen produced a fresh implementation for this card in this section
-    if(layer.querySelector('[data-component-id="'+String(anchor).replace(/"/g,'\\"')+'"]')) return;
+    if(layer.querySelector('[data-component-id="'+sel+'"]')) return;
+    // A page layer may still emit a plain keep placeholder for an anchor that is
+    // ALSO an update target (it would draw the card at its OLD position). Drop
+    // those so only the moved (override) clone remains and nothing duplicates.
+    Array.prototype.slice.call(layer.querySelectorAll('[data-keep-anchor="'+sel+'"]')).forEach(function(dup){
+      if(!dup.hasAttribute("data-tf-card-update") && dup.parentNode) dup.parentNode.removeChild(dup);
+    });
     const slot=document.createElement("div");
     slot.className="tf-keep-placeholder";
     slot.setAttribute("data-keep-anchor", anchor);

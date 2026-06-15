@@ -272,7 +272,10 @@ const ButtonBar: React.FC<ButtonBarProps> = ({
           width: '100%',
           maxWidth: fluid ? '100%' : 360,
           minWidth: fluid ? 0 : 328,
-          padding: 'var(--spacing-xl) var(--spacing-xl) 0',
+          // When embedded fluidly (e.g. a dialog/sheet footer) the host already
+          // supplies horizontal padding; adding the page-level 16px here too
+          // squeezes the buttons until short labels wrap. Keep only top spacing.
+          padding: fluid ? 'var(--spacing-md) 0 0' : 'var(--spacing-xl) var(--spacing-xl) 0',
           boxSizing: 'border-box',
         }}
       >
