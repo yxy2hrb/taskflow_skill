@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["action", "phase", "questionText", "multiSelect", "allowCustom", "options"],
+  "properties": {
+    "action": { "const": "ask" },
+    "phase": { "const": 1 },
+    "questionText": { "type": "string" },
+    "multiSelect": { "const": true },
+    "allowCustom": { "const": true },
+    "note": { "type": "string" },
+    "options": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "group", "label", "rationale"],
+        "properties": {
+          "id": { "type": "string" },
+          "group": { "type": "string" },
+          "label": { "type": "string" },
+          "rationale": { "type": "string" },
+          "default": { "type": "boolean" }
+        }
+      }
+    }
+  }
+}

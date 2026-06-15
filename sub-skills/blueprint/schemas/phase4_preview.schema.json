@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["action", "phase", "brief", "user_story_confirmed", "merged_states_by_id", "page_dsl", "validation_issues"],
+  "properties": {
+    "action": { "const": "preview" },
+    "phase": { "const": 4 },
+    "brief": { "type": "string" },
+    "user_story_confirmed": { "type": "object" },
+    "merged_states_by_id": { "type": "object" },
+    "page_dsl": {},
+    "validation_issues": {
+      "type": "array",
+      "items": { "type": "string" }
+    }
+  }
+}

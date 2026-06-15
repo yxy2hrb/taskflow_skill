@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["action", "phase", "selections_by_state"],
+  "properties": {
+    "action": { "const": "confirmed" },
+    "phase": { "const": 3 },
+    "selections_by_state": {
+      "type": "object",
+      "patternProperties": {
+        "^state_[0-9]+$": {
+          "type": "object",
+          "required": ["option_id", "implementation_plan"],
+          "properties": {
+            "option_id": {
+              "type": "string",
+              "pattern": "^(state_[0-9]+::implementation|custom)$"
+            },
+            "implementation_plan": { "type": "string" }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["action", "phase", "selections", "actor", "trigger", "happy_path", "success_criteria", "acceptance_criteria_steps", "user_story", "platform"],
+  "properties": {
+    "action": { "const": "confirmed" },
+    "phase": { "const": 1 },
+    "selections": { "type": "object" },
+    "custom_overrides": { "type": "object" },
+    "actor": { "type": "string" },
+    "context": { "type": "string" },
+    "trigger": { "type": "string" },
+    "happy_path": { "type": "string" },
+    "goal": { "type": "string" },
+    "benefit": { "type": "string" },
+    "success_criteria": { "type": "string" },
+    "acceptance_criteria_steps": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["type", "text"],
+        "properties": {
+          "type": { "enum": ["given", "when", "then", "and", "but"] },
+          "text": { "type": "string" }
+        }
+      }
+    },
+    "user_story": { "type": "string" },
+    "platform": { "enum": ["mobile", "desktop"] }
+  }
+}

@@ -1,0 +1,486 @@
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ============================================
+   HarmonyOS Sans SC — 字体声明
+   ============================================ */
+
+@font-face {
+  font-family: 'HarmonyOS Sans SC';
+  src: url('../assets/fonts/harmonyos-sans-sc/HarmonyOS_Sans_SC_Regular.ttf') format('truetype');
+  font-weight: 400;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'HarmonyOS Sans SC';
+  src: url('../assets/fonts/harmonyos-sans-sc/HarmonyOS_Sans_SC_Medium.ttf') format('truetype');
+  font-weight: 500;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'HarmonyOS Sans SC';
+  src: url('../assets/fonts/harmonyos-sans-sc/HarmonyOS_Sans_SC_Bold.ttf') format('truetype');
+  font-weight: 600;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'HarmonyOS Sans SC';
+  src: url('../assets/fonts/harmonyos-sans-sc/HarmonyOS_Sans_SC_Bold.ttf') format('truetype');
+  font-weight: 700;
+  font-display: swap;
+}
+
+/* ============================================
+   kunling-o2o Design System — 主变量层
+   ============================================ */
+
+@layer base {
+  :root {
+    /* ── shadcn 主题变量（指向 kunling 品牌色） ── */
+    --background: oklch(1 0 0);
+    --foreground: var(--color-text-primary);
+    --card: var(--color-bg-card);
+    --card-foreground: var(--color-text-primary);
+    --popover: var(--color-bg-card);
+    --popover-foreground: var(--color-text-primary);
+    --primary: var(--color-primary);
+    --primary-foreground: var(--color-text-white);
+    --secondary: var(--color-bg-hover);
+    --secondary-foreground: var(--color-text-primary);
+    --muted: var(--color-bg-disabled);
+    --muted-foreground: var(--color-text-secondary);
+    --accent: var(--color-primary-active);
+    --accent-foreground: var(--color-primary);
+    --destructive: var(--color-error);
+    --destructive-foreground: var(--color-text-white);
+    --border: var(--color-border-subtle);
+    --input: var(--color-border-subtle);
+    --ring: var(--color-primary);
+    --radius: 0.625rem;
+    --chart-1: oklch(0.87 0 0);
+    --chart-2: oklch(0.556 0 0);
+    --chart-3: oklch(0.439 0 0);
+    --chart-4: oklch(0.371 0 0);
+    --chart-5: oklch(0.269 0 0);
+    --sidebar: oklch(0.985 0 0);
+    --sidebar-foreground: var(--color-text-primary);
+    --sidebar-primary: var(--color-primary);
+    --sidebar-primary-foreground: var(--color-text-white);
+    --sidebar-accent: var(--color-primary-active);
+    --sidebar-accent-foreground: var(--color-primary);
+    --sidebar-border: var(--color-border-subtle);
+    --sidebar-ring: var(--color-primary);
+
+    /* ── kunling 自定义变量 ── */
+    --color-text-primary:     rgba(0, 0, 0, 0.9);
+    --color-text-secondary:   rgba(0, 0, 0, 0.6);
+    --color-text-muted:       rgba(0, 0, 0, 0.4);
+    --color-text-hint:        rgba(0, 0, 0, 0.4);
+    --color-text-disabled:    rgba(0, 0, 0, 0.2);
+    --color-text-white:       #ffffff;
+
+    --color-primary: #C7000B;
+    --color-primary-disabled: rgba(199, 0, 11, 0.4);
+    --color-primary-soft: rgba(199, 0, 11, 0.05);
+    --color-primary-active: rgba(199, 0, 11, 0.08);
+    --color-orange: #FF8C42;
+
+    --color-success: #10B981;
+    --color-warning: #F97316;
+    --color-error: #DC2626;
+
+    --color-bg-page: #F2F3F5;
+    --color-bg-card: #ffffff;
+    --color-bg-hover: rgba(0, 0, 0, 0.04);
+    --color-bg-disabled: rgba(0, 0, 0, 0.05);
+
+    --color-border-subtle: rgba(0, 0, 0, 0.06);
+
+    --color-divider-strong:  rgba(0, 0, 0, 0.6);
+    --color-divider:         rgba(0, 0, 0, 0.1);
+    --color-divider-subtle:  rgba(0, 0, 0, 0.05);
+    --color-divider-faint:   rgba(0, 0, 0, 0.03);
+
+    --color-mask: rgba(0, 0, 0, 0.3);
+
+    --radius-xxs: 4px;
+    --radius-md: 12px;
+    --radius-lg: 16px;
+    --radius-xl: 18px;
+    --radius-2xl: 20px;
+    --radius-3xl: 24px;
+    --radius-4xl: 32px;
+    --radius-full: 9999px;
+
+    --shadow-sm: 0 1px 6px 0 rgba(0, 0, 0, 0.08);
+    --shadow-md: 0 8px 24px 0 rgba(0, 0, 0, 0.08);
+    --shadow-lg: 0 8px 24px 0 rgba(0, 0, 0, 0.16);
+    --shadow-xl: 0 10px 20px 0 rgba(0, 0, 0, 0.15);
+
+    --font-caption-10:  10px;
+    --font-caption-12:  12px;
+    --font-display-36: 36px;
+    --font-display-48: 48px;
+    --font-display-60: 60px;
+    --font-headline-12: 12px;
+    --font-headline-14: 14px;
+    --font-headline-16: 16px;
+    --font-headline-18: 18px;
+    --font-headline-20: 20px;
+    --font-headline-24: 24px;
+    --font-body-12: 12px;
+    --font-body-14: 14px;
+    --font-body-16: 16px;
+
+    --font-weight-regular:  400;
+    --font-weight-medium:   500;
+    --font-weight-semibold: 600;
+    --font-weight-bold:     700;
+
+    --line-height-12: 12px;
+    --line-height-14: 14px;
+    --line-height-16: 16px;
+    --line-height-18: 18px;
+    --line-height-20: 20px;
+    --line-height-24: 24px;
+    --line-height-26: 26px;
+    --line-height-30: 30px;
+    --line-height-32: 32px;
+    --line-height-36: 36px;
+    --line-height-48: 48px;
+    --line-height-60: 60px;
+    --line-height-64: 64px;
+    --line-height-80: 80px;
+
+    --spacing-xs: 4px;
+    --spacing-sm: 6px;
+    --spacing-md: 8px;
+    --spacing-lg: 12px;
+    --spacing-xl: 16px;
+    --spacing-2xl: 24px;
+  }
+
+  .dark {
+    --background: oklch(0.145 0 0);
+    --foreground: oklch(0.985 0 0);
+    --card: oklch(0.205 0 0);
+    --card-foreground: oklch(0.985 0 0);
+    --popover: oklch(0.205 0 0);
+    --popover-foreground: oklch(0.985 0 0);
+    --primary: var(--color-primary);
+    --primary-foreground: var(--color-text-white);
+    --secondary: oklch(0.269 0 0);
+    --secondary-foreground: oklch(0.985 0 0);
+    --muted: oklch(0.269 0 0);
+    --muted-foreground: oklch(0.708 0 0);
+    --accent: oklch(0.269 0 0);
+    --accent-foreground: oklch(0.985 0 0);
+    --destructive: var(--color-error);
+    --destructive-foreground: var(--color-text-white);
+    --border: oklch(1 0 0 / 10%);
+    --input: oklch(1 0 0 / 15%);
+    --ring: var(--color-primary);
+    --chart-1: oklch(0.87 0 0);
+    --chart-2: oklch(0.556 0 0);
+    --chart-3: oklch(0.439 0 0);
+    --chart-4: oklch(0.371 0 0);
+    --chart-5: oklch(0.269 0 0);
+    --sidebar: oklch(0.205 0 0);
+    --sidebar-foreground: oklch(0.985 0 0);
+    --sidebar-primary: oklch(0.488 0.243 264.376);
+    --sidebar-primary-foreground: oklch(0.985 0 0);
+    --sidebar-accent: oklch(0.269 0 0);
+    --sidebar-accent-foreground: oklch(0.985 0 0);
+    --sidebar-border: oklch(1 0 0 / 10%);
+    --sidebar-ring: oklch(0.556 0 0);
+  }
+
+  * {
+    @apply border-border;
+    border-color: var(--color-border-subtle);
+  }
+
+  body {
+    @apply bg-background text-foreground;
+    font-family: 'HarmonyOS Sans SC', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Noto Sans SC', sans-serif;
+    background-color: var(--color-bg-page);
+    color: var(--color-text-primary);
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  .theme {
+    --font-heading: var(--font-sans);
+    --font-sans: 'HarmonyOS Sans SC', sans-serif;
+  }
+  html {
+    @apply font-sans;
+  }
+}
+
+/* ============================================
+   kunling Atomic Classes
+   ============================================ */
+
+@layer components {
+  /* ── Display 字系 ── */
+  .font-display-s { font-size: var(--font-display-36); line-height: var(--line-height-48); font-weight: var(--font-weight-medium); }
+  .font-display-m { font-size: var(--font-display-48); line-height: var(--line-height-64); font-weight: var(--font-weight-medium); }
+  .font-display-l { font-size: var(--font-display-60); line-height: var(--line-height-80); font-weight: var(--font-weight-medium); }
+
+  /* ── Headline 字系 ── */
+  .font-headline-xxs { font-size: var(--font-headline-12); line-height: var(--line-height-16); font-weight: var(--font-weight-medium); }
+  .font-headline-xs  { font-size: var(--font-headline-14); line-height: var(--line-height-18); font-weight: var(--font-weight-medium); }
+  .font-headline-s   { font-size: var(--font-headline-16); line-height: var(--line-height-20); font-weight: var(--font-weight-medium); }
+  .font-headline-m   { font-size: var(--font-headline-18); line-height: var(--line-height-24); font-weight: var(--font-weight-medium); }
+  .font-headline-l   { font-size: var(--font-headline-20); line-height: var(--line-height-26); font-weight: var(--font-weight-medium); }
+  .font-headline-xl  { font-size: var(--font-headline-20); line-height: var(--line-height-26); font-weight: var(--font-weight-bold); }
+  .font-headline-xxl { font-size: var(--font-headline-24); line-height: var(--line-height-32); font-weight: var(--font-weight-bold); }
+
+  /* Headline 多行行高 */
+  .font-headline-xs-multi { font-size: var(--font-headline-14); line-height: var(--line-height-20); font-weight: var(--font-weight-medium); }
+  .font-headline-s-multi  { font-size: var(--font-headline-16); line-height: var(--line-height-24); font-weight: var(--font-weight-medium); }
+  .font-headline-m-multi  { font-size: var(--font-headline-18); line-height: var(--line-height-26); font-weight: var(--font-weight-medium); }
+  .font-headline-l-multi  { font-size: var(--font-headline-20); line-height: var(--line-height-30); font-weight: var(--font-weight-medium); }
+
+  /* ── Body 字系 ── */
+  .font-body-s  { font-size: var(--font-body-12); line-height: var(--line-height-16); font-weight: var(--font-weight-regular); }
+  .font-body-m  { font-size: var(--font-body-14); line-height: var(--line-height-18); font-weight: var(--font-weight-regular); }
+  .font-body-l  { font-size: var(--font-body-16); line-height: var(--line-height-20); font-weight: var(--font-weight-regular); }
+
+  /* Body 多行行高 */
+  .font-body-s-multi { font-size: var(--font-body-12); line-height: var(--line-height-18); font-weight: var(--font-weight-regular); }
+  .font-body-m-multi { font-size: var(--font-body-14); line-height: var(--line-height-20); font-weight: var(--font-weight-regular); }
+  .font-body-l-multi { font-size: var(--font-body-16); line-height: var(--line-height-24); font-weight: var(--font-weight-regular); }
+
+  /* ── Caption 字系 ── */
+  .font-caption-s { font-size: var(--font-caption-10); line-height: var(--line-height-12); font-weight: var(--font-weight-regular); }
+  .font-caption-m { font-size: var(--font-caption-12); line-height: var(--line-height-16); font-weight: var(--font-weight-regular); }
+
+  .font-caption-s-multi { font-size: var(--font-caption-10); line-height: var(--line-height-14); font-weight: var(--font-weight-regular); }
+  .font-caption-m-multi { font-size: var(--font-caption-12); line-height: var(--line-height-18); font-weight: var(--font-weight-regular); }
+
+  /* ── Padding 类 ── */
+  .p-page    { padding: var(--spacing-lg) var(--spacing-xl); }
+  .p-card    { padding: var(--spacing-lg); }
+  .p-card-sm { padding: var(--spacing-md); }
+  .p-pill    { padding: var(--spacing-sm) var(--spacing-lg); }
+  .p-tab     { padding: var(--spacing-xs) 0; }
+
+  /* ── 图标容器 ── */
+  .size-icon-nav   { width: 40px; height: 40px; }
+  .size-icon-entry { width: 48px; height: 48px; }
+  .size-icon-card  { width: 40px; height: 40px; }
+  .size-icon-sm    { width: 28px; height: 28px; }
+  .size-badge      { width: 16px; height: 16px; font-size: 10px; }
+  .size-icon-tab   { width: 30px; height: 30px; }
+  .h-banner        { height: 140px; }
+
+  /* ── 背景渐变层 ── */
+  .bg-gradient-layer-1 {
+    width: 360px; height: 792px;
+    background:
+      linear-gradient(180deg, rgba(255,255,255,0.5) 0%, rgba(255,255,255,0) 100%),
+      radial-gradient(circle 200px at 360px 140px, rgba(255,143,111,0.4) 0%, rgba(250,194,193,0) 100%),
+      radial-gradient(circle 300px at 0px -100px, rgba(247,168,10,0.4) 0%, rgba(247,106,10,0) 100%),
+      linear-gradient(180deg, #f6f6f5 0%, #f2f3f5 100%);
+  }
+  .bg-gradient-layer-2 {
+    width: 360px; height: 792px;
+    background:
+      linear-gradient(180deg, rgba(255,255,255,0.4) 10%, rgba(255,255,255,0) 100%),
+      radial-gradient(circle 231px at 320px 0px, rgba(255,143,111,0.2) 0%, rgba(250,194,193,0) 100%),
+      radial-gradient(circle 271px at 85px -105px, rgba(247,168,10,0.2) 0%, rgba(247,106,10,0) 100%),
+      linear-gradient(180deg, #f6f6f5 0%, #f2f3f5 100%);
+  }
+  .bg-gradient-layer-3 {
+    width: 360px; height: 792px;
+    background:
+      linear-gradient(180deg, rgba(255,255,255,0.4) 10%, rgba(255,255,255,0) 100%),
+      radial-gradient(circle 220px at 360px 0px, rgba(255,143,111,0.4) 0%, rgba(250,194,193,0) 100%),
+      radial-gradient(circle 389px at 111px -284px, rgba(247,168,10,0.4) 0%, rgba(247,106,10,0) 100%),
+      linear-gradient(180deg, #f6f6f5 0%, #f2f3f5 100%);
+  }
+
+  /* ── 交互反馈 ── */
+  .tap-scale { transition: transform 150ms ease; }
+  .tap-scale:active { transform: scale(0.98); }
+  .tap-opacity:active { opacity: 0.8; }
+
+  /* ── 通用 Flex ── */
+  .flex-distribute { display: flex; align-items: center; justify-content: space-between; }
+  .flex-center     { display: flex; align-items: center; }
+  .flex-between    { display: flex; align-items: center; justify-content: space-between; }
+  .scrollbar-hide { scrollbar-width: none; -ms-overflow-style: none; }
+  .scrollbar-hide::-webkit-scrollbar { display: none; }
+  .mobile-canvas,
+  .mobile-canvas * { scrollbar-width: none; -ms-overflow-style: none; }
+  .mobile-canvas::-webkit-scrollbar,
+  .mobile-canvas *::-webkit-scrollbar { display: none; }
+
+  /* ── 分割线 ── */
+  .divider { border: none; border-top: 1px solid var(--color-divider); margin: 0; }
+}
+
+/* ============================================
+   Static-safe component utility layer
+
+   These rules make the component library render correctly after React SSR in
+   taskflow static HTML. They intentionally cover only the utility classes used
+   by resources/components, so the generated output does not depend on a
+   Tailwind runtime or build step.
+   ============================================ */
+
+.flex { display: flex; }
+.inline-flex { display: inline-flex; }
+.grid { display: grid; }
+.block { display: block; }
+.hidden { display: none; }
+
+.flex-col { flex-direction: column; }
+.flex-1 { flex: 1 1 0%; }
+.flex-shrink-0, .shrink-0 { flex-shrink: 0; }
+
+.items-start { align-items: flex-start; }
+.items-center { align-items: center; }
+.items-end { align-items: flex-end; }
+.items-baseline { align-items: baseline; }
+.justify-center { justify-content: center; }
+.justify-between { justify-content: space-between; }
+
+.relative { position: relative; }
+.absolute { position: absolute; }
+.fixed { position: fixed; }
+.inset-0 { inset: 0; }
+.top-full { top: 100%; }
+.left-0 { left: 0; }
+.right-0 { right: 0; }
+.top-0 { top: 0; }
+.bottom-0 { bottom: 0; }
+.z-10 { z-index: 10; }
+.z-40 { z-index: 40; }
+.z-50 { z-index: 50; }
+
+.w-full { width: 100%; }
+.h-full { height: 100%; }
+.w-5 { width: 20px; }
+.h-5 { height: 20px; }
+.w-8 { width: 32px; }
+.w-10 { width: 40px; }
+.h-10 { height: 40px; }
+.w-12 { width: 48px; }
+.h-12 { height: 48px; }
+.w-\[1px\] { width: 1px; }
+.h-\[16px\] { height: 16px; }
+.w-\[64px\] { width: 64px; }
+.w-\[72px\] { width: 72px; }
+.h-\[46px\] { height: 46px; }
+.min-w-0 { min-width: 0; }
+
+.overflow-hidden { overflow: hidden; }
+.overflow-x-auto { overflow-x: auto; }
+.overflow-y-auto { overflow-y: auto; }
+.overflow-x-hidden { overflow-x: hidden; }
+
+.cursor-pointer { cursor: pointer; }
+.pointer-events-none { pointer-events: none; }
+.border-none { border: none; }
+.border-0 { border: 0; }
+.border { border: 1px solid var(--color-border-subtle); }
+.border-b { border-bottom: 1px solid var(--color-border-subtle); }
+.border-black { border-color: #000; }
+
+.bg-transparent { background: transparent; }
+.bg-white { background-color: #fff; }
+.bg-\[var\(--color-primary\)\] { background-color: var(--color-primary); }
+.bg-\[var\(--color-bg-hover\)\] { background-color: var(--color-bg-hover); }
+.bg-\[var\(--color-primary-active\)\] { background-color: var(--color-primary-active); }
+.text-white { color: #fff; }
+
+.rounded-\[var\(--radius-xxs\)\] { border-radius: var(--radius-xxs); }
+.rounded-\[var\(--radius-md\)\] { border-radius: var(--radius-md); }
+.rounded-\[var\(--radius-lg\)\] { border-radius: var(--radius-lg); }
+.rounded-\[var\(--radius-xl\)\] { border-radius: var(--radius-xl); }
+.rounded-\[var\(--radius-2xl\)\] { border-radius: var(--radius-2xl); }
+.rounded-\[var\(--radius-full\)\] { border-radius: var(--radius-full); }
+
+.truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.whitespace-nowrap { white-space: nowrap; }
+.text-left { text-align: left; }
+.text-center { text-align: center; }
+
+.p-0 { padding: 0; }
+.px-3 { padding-left: 12px; padding-right: 12px; }
+.px-4 { padding-left: 16px; padding-right: 16px; }
+.py-2 { padding-top: 8px; padding-bottom: 8px; }
+.py-2\.5 { padding-top: 10px; padding-bottom: 10px; }
+.py-16 { padding-top: 64px; padding-bottom: 64px; }
+.pl-\[var\(--spacing-lg\)\] { padding-left: var(--spacing-lg); }
+.mt-2 { margin-top: 8px; }
+.mb-3 { margin-bottom: 12px; }
+.-top-0\.5 { top: -2px; }
+.-right-0\.5 { right: -2px; }
+.left-1\/2 { left: 50%; }
+.top-1\/2 { top: 50%; }
+.-translate-y-1\/2 { transform: translateY(-50%); }
+.rotate-180 { transform: rotate(180deg); }
+
+.gap-0 { gap: 0; }
+.gap-2 { gap: 8px; }
+.gap-4 { gap: 16px; }
+.grid-cols-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.space-y-2 > * + * { margin-top: 8px; }
+
+.transition-all,
+.transition-colors,
+.transition-opacity,
+.transition-transform {
+  transition-duration: 150ms;
+  transition-timing-function: ease;
+}
+.duration-150 { transition-duration: 150ms; }
+.duration-200 { transition-duration: 200ms; }
+.opacity-40 { opacity: 0.4; }
+
+.line-clamp-2 {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* ============================================
+   页面转场动画
+   ============================================ */
+
+@keyframes slide-in-right {
+  from { transform: translateX(100%); }
+  to   { transform: translateX(0); }
+}
+@keyframes slide-out-right {
+  from { transform: translateX(0); }
+  to   { transform: translateX(100%); }
+}
+@keyframes fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+@keyframes slide-up {
+  from { transform: translateY(100%); }
+  to   { transform: translateY(0); }
+}
+@keyframes page-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+.animate-slide-in-right { animation: slide-in-right 300ms ease-out forwards; }
+.animate-slide-out-right { animation: slide-out-right 300ms ease-in forwards; }
+.fade-in { animation: fade-in 300ms ease-out forwards; }
+.animate-slide-up { animation: slide-up 300ms ease-out forwards; }
+.animate-page-in { animation: page-in 150ms ease-out; }
