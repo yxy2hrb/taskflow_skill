@@ -1,0 +1,36 @@
+{
+  "ok": true,
+  "stage": 1,
+  "method": "playwright-getBoundingClientRect",
+  "input": {
+    "inputDir": "E:\\任务流\\任务流\\demo\\skill_and_new_test13\\taskflow-llm-pagegen\\examples\\smoke_case",
+    "htmlPath": "E:\\任务流\\任务流\\demo\\skill_and_new_test13\\taskflow-llm-pagegen\\examples\\smoke_case\\html\\Index.original.html",
+    "imagePath": "E:\\任务流\\任务流\\demo\\skill_and_new_test13\\taskflow-llm-pagegen\\examples\\smoke_case\\wps_doc_0.png"
+  },
+  "adaptive_depth": {
+    "target_ratio": 0.6,
+    "selected_depth": 9,
+    "forced_depth": null,
+    "coverage_ratio": 0.6098,
+    "total_div_count": 82,
+    "selected_div_count": 50
+  },
+  "viewport": {
+    "width": 360,
+    "height": 792
+  },
+  "counts": {
+    "all_divs": 82,
+    "selected_divs": 50,
+    "bbox_visible": 50,
+    "bbox_invisible": 0,
+    "annotated_count": 40
+  },
+  "outputs": {
+    "divs_all": "E:\\任务流\\任务流\\demo\\skill_and_new_test13\\taskflow-llm-pagegen\\examples\\smoke_case\\.result_bbox\\divs.all.json",
+    "divs_selected": "E:\\任务流\\任务流\\demo\\skill_and_new_test13\\taskflow-llm-pagegen\\examples\\smoke_case\\.result_bbox\\divs.selected.json",
+    "div_bbox": "E:\\任务流\\任务流\\demo\\skill_and_new_test13\\taskflow-llm-pagegen\\examples\\smoke_case\\.result_bbox\\div_bbox.json",
+    "annotated_body_bbox": "E:\\任务流\\任务流\\demo\\skill_and_new_test13\\taskflow-llm-pagegen\\examples\\smoke_case\\.result_bbox\\annotated_body_bbox.html",
+    "report": "E:\\任务流\\任务流\\demo\\skill_and_new_test13\\taskflow-llm-pagegen\\examples\\smoke_case\\.result_bbox\\report.json"
+  }
+}

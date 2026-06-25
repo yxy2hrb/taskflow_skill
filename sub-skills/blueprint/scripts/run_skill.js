@@ -1,5 +1,6 @@
 #!/usr/bin/env node
-const path = require('path');
+const { loadSkillEnv } = require('../../../scripts/paths');
+const { resolveTextModel } = require('../../../scripts/llm_config');
 const {
   createSession,
   loadSession,
@@ -45,13 +46,13 @@ function parseArgs(argv) {
 function usage() {
   return [
     'Usage:',
-    '  node run_skill.js init --dirs <caseDir> [--session-dir <dir>] [--model qwen3.7-max]',
+    '  node run_skill.js init --dirs <caseDir> [--session-dir <dir>] [--model <name>]',
     '  node run_skill.js generate --session-dir <dir> --phase 1|2|3|4',
     '  node run_skill.js confirm --session-dir <dir> --phase 1|2|3|4',
     '  node run_skill.js confirm --session-dir <dir> --phase 1|2|3|4 --input feedback.json|feedback.txt',
     '  node run_skill.js resume --session-dir <dir>',
     '  node run_skill.js status --session-dir <dir>',
-    '  node run_skill.js auto --dirs <caseDir...> [--session-dir <dir>] [--model qwen3.7-max]',
+    '  node run_skill.js auto --dirs <caseDir...> [--session-dir <dir>] [--model <name>]',
   ].join('\n');
 }
 
@@ -83,6 +84,7 @@ async function printStatus(sessionDir) {
 }
 
 async function main() {
+  loadSkillEnv();
   const opts = parseArgs(process.argv.slice(2));
   const { command, flags, dirs } = opts;
   if (!command || flags.help) {
@@ -98,7 +100,7 @@ async function main() {
     const created = await createSession({
       sourceDir: dirs[0],
       sessionDir: flags.sessionDir || '',
-      model: flags.model || 'qwen3.7-max',
+      model: resolveTextModel(flags.model || ''),
       mode: flags.mode || 'interactive',
       inputPath: flags.input || '',
       pageDslPath: flags.pageDsl || '',
@@ -227,7 +229,7 @@ async function main() {
     const results = await runAuto({
       dirs,
       sessionDir: flags.sessionDir || '',
-      model: flags.model || 'qwen3.7-max',
+      model: resolveTextModel(flags.model || ''),
       inputPath: flags.input || '',
       pageDslPath: flags.pageDsl || '',
     });

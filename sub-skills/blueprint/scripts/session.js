@@ -1,6 +1,8 @@
 const fs = require('fs');
 const fsp = require('fs/promises');
 const path = require('path');
+const { loadSkillEnv } = require('../../../scripts/paths');
+const { resolveTextModel } = require('../../../scripts/llm_config');
 
 const ROOT = process.cwd();
 const VALID_STATUSES = new Set([
@@ -61,12 +63,14 @@ async function readJson(file) {
 async function createSession({
   sessionDir,
   sourceDir,
-  model = 'qwen3.7-max',
+  model,
   mode = 'interactive',
   inputPath = '',
   pageDslPath = '',
   stamp = stampNow(),
 }) {
+  loadSkillEnv();
+  const resolvedModel = resolveTextModel(model || '');
   const source = resolveFromRoot(sourceDir);
   if (!fs.existsSync(source)) throw new Error(`Missing source directory: ${source}`);
   const brief = resolveSourceFile(source, inputPath, ['input.txt', '1.md']);
@@ -80,7 +84,7 @@ async function createSession({
   ]);
   const session = {
     stamp,
-    model,
+    model: resolvedModel,
     source_dir: relativeToRoot(source),
     mode,
     current_phase: 1,

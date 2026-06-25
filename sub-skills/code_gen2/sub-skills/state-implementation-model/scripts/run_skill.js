@@ -3,9 +3,13 @@
 
 const fs = require("fs");
 const path = require("path");
-
-const ROOT = path.resolve(__dirname, "../../../../../../../..");
-const SKILL_ROOT = path.resolve(__dirname, "../../../../..");
+const {
+  loadSkillEnv,
+  configureNodePath,
+  resolveArgPath,
+  exists,
+} = require("../../../../../scripts/paths");
+const { callJsonChat, resolveTextModel } = require("../../../../../scripts/llm_config");
 
 function readUtf8(file) {
   return fs.readFileSync(file, "utf8");
@@ -24,19 +28,6 @@ function argValue(args, name, fallback) {
 function stateNum(id) {
   const match = String(id || "").match(/(\d+)/);
   return match ? Number(match[1]) : 0;
-}
-
-function loadDotEnv(file) {
-  if (!fs.existsSync(file)) return;
-  for (const line of readUtf8(file).split(/\r?\n/)) {
-    const match = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)\s*$/);
-    if (!match) continue;
-    let value = match[2];
-    if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
-      value = value.slice(1, -1);
-    }
-    if (process.env[match[1]] == null) process.env[match[1]] = value;
-  }
 }
 
 function stripThink(text) {
@@ -173,17 +164,9 @@ function patchAnchor(patch) {
 // LLMs sometimes express an automatic transition as a bind patch with a
 // pseudo anchor like "system"/"auto". The transition is already carried by the
 // target state's trigger; such binds can never attach to a DOM element.
-function isSystemBindAnchor(anchor) {
-  return typeof anchor === "string" && /^(system|auto|timer|timeout|load(ing|_complete)?|none|null|submit_success|success)$/i.test(anchor.trim());
-}
-
 function gotoStateNum(value) {
   const match = String(value || "").match(/state[_-]?(\d+)/i);
   return match ? Number(match[1]) : 0;
-}
-
-function patchGotoStateNum(patch) {
-  return gotoStateNum(patch?.goto) || gotoStateNum(patch?.action);
 }
 
 function isClickAction(action) {
@@ -191,6 +174,52 @@ function isClickAction(action) {
   // real long-press, so it is treated as a tap/click trigger.
   return /(^|:)click$/i.test(String(action || "")) || /^tap$/i.test(String(action || ""))
     || /long[\s_-]?press|长按/i.test(String(action || ""));
+}
+
+// Outbound trigger model: a state advances to the next state by either a user
+// interaction on an anchor (always bound as a CLICK — taps, long-press, drag,
+// swipe, selecting an option, or "filling" an input all collapse to one click;
+// no real text/gesture input is captured) or by an automatic timed transition
+// ("wait": loading→loaded, submitting→success, toast auto-dismiss, splash→home).
+function triggerActionKind(action) {
+  const a = String(action || "").trim().toLowerCase();
+  if (!a) return "click";
+  if (/^wait$/.test(a)
+    || /timeout|data_loaded|load(ing|_complete)?|submit_success|success|system|auto|delay|完成|系统|自动|加载|提交中|等待|延时/.test(a)) {
+    return "wait";
+  }
+  return "click";
+}
+
+// Normalize one outbound trigger to {anchor?, action, goto, target?}. Returns
+// null when it carries no usable destination.
+function normalizeOutboundTrigger(raw, idToAnchor) {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const action = triggerActionKind(raw.action || raw.event);
+  const gotoNum = gotoStateNum(raw.goto) || gotoStateNum(raw.action) || gotoStateNum(raw.target_state);
+  if (!gotoNum) return null;
+  const out = { action, goto: `state_${gotoNum}` };
+  if (action !== "wait") {
+    let anchor = ownString(raw, "anchor") || ownString(raw, "target_anchor");
+    if (typeof anchor === "string") anchor = normalizeAnchorValue(anchor, idToAnchor);
+    if (anchor) out.anchor = anchor;
+    const target = raw.target != null && typeof raw.target !== "object" ? String(raw.target).trim() : "";
+    if (target) out.target = target;
+  }
+  return out;
+}
+
+function dedupeTriggers(triggers) {
+  const seen = new Set();
+  const out = [];
+  for (const trig of triggers) {
+    if (!trig) continue;
+    const key = `${trig.action}|${trig.anchor || ""}|${trig.goto}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(trig);
+  }
+  return out;
 }
 
 function registryIdToAnchorMap(registry) {
@@ -413,12 +442,16 @@ function normalizeModificationEntry(entry, parentId) {
   const target = entry.target || entry.child || entry.path || entry["目标"] || entry["子组件"];
   if (typeof target === "string" && typeof change === "string") {
     const parsed = parseModificationTarget(target);
-    return copyModificationSetFields(entry, makeModification(
+    const made = copyModificationSetFields(entry, makeModification(
       parsed.target,
       entry.target_component || entry.component || parsed.target_component,
       entry.parent || parsed.parent || parentId,
       change
     ));
+    if (made && typeof entry.type === "string" && /^(create|update|delete)$/i.test(entry.type.trim())) {
+      made.type = entry.type.trim().toLowerCase();
+    }
+    return made;
   }
   const keys = Object.keys(entry);
   if (keys.length === 1 && typeof entry[keys[0]] === "string") {
@@ -426,6 +459,81 @@ function normalizeModificationEntry(entry, parentId) {
     return makeModification(parsed.target, parsed.target_component, parsed.parent || parentId, entry[keys[0]]);
   }
   return null;
+}
+
+// A modification whose target is one of the container's OWN fields (not a
+// child component). Child-component targets get a create/update `type`.
+const MODIFICATION_FIELD_TARGET = /^(self|text|text_style|bbox|layout|props($|\.)|children$)/i;
+
+function modificationChildTarget(target) {
+  const t = String(target || "").trim().replace(/^children\./, "");
+  return t.split(".")[0].trim();
+}
+
+function isChildModification(mod) {
+  const target = String(mod?.target || "").trim();
+  if (!target) return false;
+  return !MODIFICATION_FIELD_TARGET.test(target);
+}
+
+// Container's OWN field targets (no child component involved).
+const MODIFICATION_SELF_FIELD = /^(self|text|text_style|bbox|layout|props)($|\.|\[)/i;
+
+// Fold the (target, parent) pair into a single canonical `target` path and drop
+// `parent`. A child component is addressed as "children.<id>"; a field on that
+// child as "children.<id>.props.x" / ".text" / ".bbox"; a grandchild as
+// "children.<id>.children.<id2>". A container's own field stays "props.x" /
+// "text" / "bbox" / etc. `parent` is redundant once the path is complete — the
+// component tree already encodes ownership — so it is removed.
+function canonicalizeModificationTarget(mod, containerId) {
+  if (!mod || typeof mod !== "object") return;
+  let target = String(mod.target || "").trim();
+  const parent = String(mod.parent || "").trim();
+  const parentIsChild = Boolean(parent) && parent !== containerId;
+  const isField = target === "self" || MODIFICATION_SELF_FIELD.test(target);
+  if (parentIsChild) {
+    if (isField) {
+      target = target === "self" ? `children.${parent}` : `children.${parent}.${target}`;
+    } else {
+      // `target` may be a bare child id ("radio_time") OR a path that already
+      // includes the parent segment ("section_time.children.radio_time" or
+      // "children.section_time.children.radio_time"). Only prepend the parent
+      // wrapper when it is not already present; otherwise the parent segment is
+      // duplicated, e.g. children.section_time.children.section_time.children.radio_time.
+      const bare = target.replace(/^children\./, "");
+      target = (bare === parent || bare.startsWith(`${parent}.`))
+        ? `children.${bare}`
+        : `children.${parent}.children.${bare}`;
+    }
+  } else if (target && !isField) {
+    target = `children.${target.replace(/^children\./, "")}`;
+  }
+  mod.target = target;
+  delete mod.parent;
+}
+
+// Stamp every modification with `type`: "create" for a brand-new child
+// component (not present in the previous implementation), "update" for a
+// change to a child/field that already existed, or "delete" to remove an
+// existing child component from the container. Only a previously-rendered
+// component may be updated/deleted; a new sub-component must be created. The
+// component-codegen step relies on this to decide whether to regenerate the
+// parent so the new/removed child is actually inserted/dropped. An
+// author-supplied type wins.
+function annotateModificationTypes(modifications, previousSpec) {
+  const prevChildIds = new Set(
+    patchChildren(previousSpec).map((child) => child?.id || child?.name).filter(Boolean)
+  );
+  for (const mod of modifications) {
+    if (!mod || typeof mod !== "object") continue;
+    if (mod.type === "create" || mod.type === "update" || mod.type === "delete") continue;
+    if (isChildModification(mod)) {
+      mod.type = prevChildIds.has(modificationChildTarget(mod.target)) ? "update" : "create";
+    } else {
+      mod.type = "update";
+    }
+  }
+  return modifications;
 }
 
 function shortValueText(value) {
@@ -436,6 +544,40 @@ function shortValueText(value) {
 
 function sameJson(a, b) {
   return JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
+}
+
+// Direct child specs of an original registry anchor, read from the semantic DOM
+// tree. Seeds previousSpec.children so a modification targeting an existing
+// original child is typed as `update`, not mistaken for a brand-new `create`.
+function registryChildrenOf(registry, anchorId) {
+  if (!anchorId) return [];
+  const out = [];
+  const nodes = registry?.semantic_dom_tree?.nodes;
+  if (nodes && typeof nodes === "object") {
+    const node = nodes[anchorId];
+    for (const cid of Array.isArray(node?.children) ? node.children : []) {
+      const child = nodes[cid] || {};
+      out.push({ id: cid, component: child.component || child.semantic || null });
+    }
+    if (out.length) return out;
+  }
+  const roots = registry?.semantic_registry_tree?.roots;
+  if (Array.isArray(roots)) {
+    const find = (list) => {
+      for (const n of list || []) {
+        if ((n?.anchor || n?.name) === anchorId) return n;
+        const hit = find(n?.children);
+        if (hit) return hit;
+      }
+      return null;
+    };
+    const node = find(roots);
+    for (const c of node?.children || []) {
+      const a = c?.anchor || c?.name;
+      if (a) out.push({ id: a, component: c.component || c.semantic || null });
+    }
+  }
+  return out;
 }
 
 function previousSpecForUpdate(patch, virtualPatchById, registry, idToAnchor) {
@@ -452,6 +594,7 @@ function previousSpecForUpdate(patch, virtualPatchById, registry, idToAnchor) {
     text: typeof entry.text === "string" ? entry.text : "",
     bbox: Array.isArray(entry.bbox) ? entry.bbox : undefined,
     props: {},
+    children: registryChildrenOf(registry, id),
   };
 }
 
@@ -489,9 +632,13 @@ function diffUpdateModifications(patch, previousSpec) {
     const childId = child?.id || child?.name;
     if (!childId) continue;
     if (!prevChildren.has(childId)) {
-      mods.push(makeModification(childId, child.component || null, parent, "新增子组件"));
+      const mod = makeModification(childId, child.component || null, parent, "新增子组件");
+      if (mod) mod.type = "create";
+      mods.push(mod);
     } else if (!sameJson(prevChildren.get(childId), child)) {
-      mods.push(makeModification(childId, child.component || prevChildren.get(childId)?.component || null, parent, "子组件内容/属性更新，按当前 patch 重渲染该子组件"));
+      const mod = makeModification(childId, child.component || prevChildren.get(childId)?.component || null, parent, "子组件内容/属性更新，按当前 patch 重渲染该子组件");
+      if (mod) mod.type = "update";
+      mods.push(mod);
     }
   }
   return mods.filter(Boolean);
@@ -539,6 +686,17 @@ function normalizeUpdateModifications(patch, previousSpec, idToAnchor = new Map(
     modifications = [makeModification("self", null, parent,
       "未检测到与上一状态的字段差异；保持原实现不变，仅确认该组件在当前状态可见")].filter(Boolean);
   }
+  annotateModificationTypes(modifications, previousSpec);
+  // A `delete` may only remove a CHILD component of this container — never the
+  // top-level container itself. Drop any delete that targets a container field
+  // (self/text/props/...) or resolves to the patch id; such a request would
+  // delete the parent, which is not allowed.
+  modifications = modifications.filter((mod) => {
+    if (!mod || mod.type !== "delete") return true;
+    if (!isChildModification(mod)) return false;
+    const childId = modificationChildTarget(mod.target);
+    return Boolean(childId) && childId !== parent;
+  });
   patch.modifications = modifications;
 
   let rawPreserve = null;
@@ -553,6 +711,8 @@ function normalizeUpdateModifications(patch, previousSpec, idToAnchor = new Map(
     .filter((item) => typeof item === "string" && item.trim())
     .map((item) => normalizeAnchorValue(item, idToAnchor));
   patch.preserve = [...new Set([...authored, ...derivePreserve(patch, previousSpec, modifications)])];
+  // Final: fold parent into a single canonical target path and drop parent.
+  for (const mod of modifications) canonicalizeModificationTarget(mod, parent);
 }
 
 // --- Card-level update bookkeeping -------------------------------------------
@@ -649,18 +809,40 @@ function mergeLeafOriginalUpdates(updateList, registry, idToAnchor, treeInfo) {
 }
 
 // Cumulative modification ledger per card: each state's update patch carries
-// modifications_applied = all modifications since the original implementation
+// `modifications` = all modifications since the original implementation
 // (later entries on the same target win). This makes every state
 // self-contained — the renderer applies one list, never an ancestor chain.
+// Field-level merge of two modifications that share the same target|parent.
+// Scalars (set_text/set_bbox/change/type/...) follow "later wins", but object
+// fields (set_props/set_text_style) are DEEP-merged so an earlier state's
+// set_props.color is not wiped out when a later state only sets set_bbox or
+// set_props.fontSize. Overwriting the whole entry (the old behaviour) silently
+// dropped those earlier props from the cumulative ledger.
+function mergeOneModification(prev, next) {
+  const isObj = (v) => v && typeof v === "object" && !Array.isArray(v);
+  if (!isObj(prev)) return next;
+  if (!isObj(next)) return prev;
+  const out = { ...prev, ...next };
+  if (isObj(prev.set_props) || isObj(next.set_props)) {
+    out.set_props = { ...(isObj(prev.set_props) ? prev.set_props : {}), ...(isObj(next.set_props) ? next.set_props : {}) };
+  }
+  if (isObj(prev.set_text_style) || isObj(next.set_text_style)) {
+    out.set_text_style = { ...(isObj(prev.set_text_style) ? prev.set_text_style : {}), ...(isObj(next.set_text_style) ? next.set_text_style : {}) };
+  }
+  return out;
+}
+
 function mergeModificationLists(previous, current) {
   const merged = [];
   const indexByKey = new Map();
   for (const list of [previous, current]) {
     for (const mod of list || []) {
       if (!mod || typeof mod !== "object") continue;
-      const key = `${mod.target || ""}|${mod.parent || ""}`;
-      if (indexByKey.has(key)) merged[indexByKey.get(key)] = mod;
-      else {
+      const key = `${mod.target || ""}`;
+      if (indexByKey.has(key)) {
+        const idx = indexByKey.get(key);
+        merged[idx] = mergeOneModification(merged[idx], mod);
+      } else {
         indexByKey.set(key, merged.length);
         merged.push(mod);
       }
@@ -669,46 +851,43 @@ function mergeModificationLists(previous, current) {
   return merged;
 }
 
-// When a later state keeps a region that contains a card updated earlier in
-// its parent chain, the card id is auto-added to keep so the state renders the
-// NEWEST card without restating the update.
-function autoKeepUpdatedCards(model, registry) {
-  const byId = new Map((model.states || []).map((state) => [state.id, state]));
-  for (const state of model.states || []) {
-    const chain = [];
-    const seen = new Set();
-    let cursor = state;
-    while (cursor && cursor.parent_state && !seen.has(cursor.parent_state)) {
-      seen.add(cursor.parent_state);
-      cursor = byId.get(cursor.parent_state);
-      if (cursor) chain.push(cursor);
-    }
-    const updatedCards = new Map();
-    for (const ancestor of chain.reverse()) {
-      for (const patch of ancestor.inheritance?.update || []) {
-        const id = patch?.id || patch?.name;
-        const entry = id ? registry.semantic_dom_registry?.[id] : null;
-        if (entry && Array.isArray(entry.bbox)) updatedCards.set(id, entry.bbox.map(Number));
-      }
-    }
-    if (!updatedCards.size) continue;
-    const keep = state.inheritance?.keep;
-    if (!Array.isArray(keep)) continue;
-    const present = new Set([
-      ...keep.filter((item) => typeof item === "string"),
-      ...(state.inheritance?.update || []).map((patch) => patch?.id || patch?.name),
-      ...(state.inheritance?.create || []).map((patch) => patch?.id || patch?.name),
-    ].filter(Boolean));
-    for (const [id, bbox] of updatedCards) {
-      if (present.has(id)) continue;
-      const coveredByKeep = keep.some((item) => {
-        if (typeof item !== "string" || item === id) return false;
-        const entry = registry.semantic_dom_registry?.[item];
-        return Array.isArray(entry?.bbox) && bboxContains(entry.bbox.map(Number), bbox);
-      });
-      if (coveredByKeep) keep.push(id);
-    }
+// Two modifications have the same EFFECT when they touch the same target with
+// identical concrete set-fields and type. Cosmetic fields (`change`,
+// `target_component`, `parent`) are ignored. Used to detect a later state that
+// merely restates an ancestor's change verbatim.
+function sameModificationEffect(a, b) {
+  if (!a || !b) return false;
+  if (String(a.type || "") !== String(b.type || "")) return false;
+  const norm = (m) => ({
+    set_props: m.set_props && typeof m.set_props === "object" && !Array.isArray(m.set_props) ? m.set_props : null,
+    set_text: typeof m.set_text === "string" ? m.set_text : null,
+    set_text_style: m.set_text_style && typeof m.set_text_style === "object" ? m.set_text_style : null,
+    set_bbox: Array.isArray(m.set_bbox) ? m.set_bbox : null,
+  });
+  const na = norm(a);
+  const nb = norm(b);
+  return sameJson(na.set_props, nb.set_props)
+    && na.set_text === nb.set_text
+    && sameJson(na.set_text_style, nb.set_text_style)
+    && sameJson(na.set_bbox, nb.set_bbox);
+}
+
+// Keep only the modifications that introduce a NEW effect relative to the
+// parent state's cumulative ledger. Virtual (codegen) components are carried
+// forward by component-codegen across states, so a later state only needs its
+// own delta; entries that merely repeat an ancestor change (same target + same
+// set-fields) are dropped to avoid redundant child re-generation.
+function dropRestatedModifications(current, baseMods) {
+  const baseByTarget = new Map();
+  for (const mod of baseMods || []) {
+    if (mod && typeof mod === "object") baseByTarget.set(String(mod.target || ""), mod);
   }
+  return (current || []).filter((mod) => {
+    if (!mod || typeof mod !== "object") return false;
+    const prev = baseByTarget.get(String(mod.target || ""));
+    if (!prev) return true;
+    return !sameModificationEffect(prev, mod);
+  });
 }
 
 function isOverlayLike(patch) {
@@ -960,6 +1139,25 @@ function hasStructuredContainerContent(patch) {
   return patchChildren(patch).length > 0;
 }
 
+// A top-level flow card may anchor itself via layout.startAnchor ("below:xxx")
+// but omit layout.group. page-layer groups flow cards by layout.group and
+// applies the startAnchor offset per group; a card with a startAnchor but no
+// group is dropped from flow layout entirely and renders at the container top,
+// overlapping any absolutely-placed anchor it was meant to sit below (e.g. a
+// created/kept top nav). Synthesize a singleton group keyed by the card id so
+// the flow placement (and its startAnchor offset) applies.
+function ensureFlowGroupForAnchoredPatch(patch) {
+  if (!patch || typeof patch !== "object" || Array.isArray(patch)) return;
+  if (Array.isArray(patch.bbox)) return; // bbox-placed cards are absolute, not flow
+  const layout = patch.layout;
+  if (!layout || typeof layout !== "object" || Array.isArray(layout)) return;
+  if (!layout.startAnchor || layout.group) return;
+  const id = patch.id || patch.name;
+  if (!id) return;
+  layout.group = String(id);
+  if (layout.order == null) layout.order = 1;
+}
+
 function normalizeNestedChildLayout(patch, depth = 0) {
   if (!patch || typeof patch !== "object" || Array.isArray(patch)) return;
   if (depth > 0 && Array.isArray(patch.bbox)) {
@@ -1031,9 +1229,6 @@ function stateContentBottom(state) {
   let bottom = 0;
   for (const patch of state.inheritance?.create || []) bottom = Math.max(bottom, patchBottom(patch));
   for (const patch of state.inheritance?.update || []) bottom = Math.max(bottom, patchBottom(patch));
-  for (const patch of state.patches || []) {
-    if (patch?.type === "create" || patch?.type === "update") bottom = Math.max(bottom, patchBottom(patch));
-  }
   return bottom;
 }
 
@@ -1126,17 +1321,21 @@ function normalizeModel(model, initialHeight, registry = {}) {
   const treeInfo = registryTreeInfo(registry);
 
   const virtualPatchById = new Map();
+  // Ids that were CREATED by the state model (virtual codegen components, plus
+  // their nested children). These are rendered from generated React and carried
+  // forward by component-codegen, so their update patches only need a per-state
+  // delta. Original DOM anchors (registry keys not in this set) instead keep a
+  // cumulative ledger because page-layer replays it onto a clone of the source.
+  const createdVirtualIds = new Set();
   for (const state of model.states || []) {
-    if (!state.trigger || typeof state.trigger !== "object" || Array.isArray(state.trigger)) state.trigger = null;
-    if (stateNum(state.id) === 1 && !state.parent_state) state.trigger = null;
-    if (typeof state.trigger?.anchor === "string") state.trigger.anchor = normalizeAnchorValue(state.trigger.anchor, idToAnchor);
-
     const patchList = Array.isArray(state.patches) ? state.patches : [];
     const inheritance = state.inheritance && typeof state.inheritance === "object" && !Array.isArray(state.inheritance) ? state.inheritance : {};
     const keep = new Set((inheritance.keep || []).map((item) => typeof item === "string" ? normalizeAnchorValue(item, idToAnchor) : item));
     const create = Array.isArray(inheritance.create) ? inheritance.create.slice() : [];
     const update = Array.isArray(inheritance.update) ? inheritance.update.slice() : [];
 
+    // Backward compat: an LLM may still place create/update/keep in `patches`.
+    // Fold them into inheritance; `bind` is now expressed via `triggers`.
     for (const patch of patchList) {
       if (!patch || typeof patch !== "object" || Array.isArray(patch)) continue;
       normalizePatchAnchorRefs(patch, idToAnchor);
@@ -1144,28 +1343,18 @@ function normalizeModel(model, initialHeight, registry = {}) {
       if (patch.type === "keep" && anchor) keep.add(anchor);
       if (patch.type === "create") create.push(patch);
       if (patch.type === "update") update.push(patch);
-      if (patch.type === "bind" && anchor && !isSystemBindAnchor(anchor)) {
-        const targetNum = patchGotoStateNum(patch);
-        if (!patch.goto && targetNum) patch.goto = `state_${targetNum}`;
-        if (!state.trigger && stateNum(state.id) > 1 && targetNum === stateNum(state.id)) {
-          state.trigger = { event: patch.event || "click", anchor, action: isClickAction(patch.action) ? "click" : (patch.action || "click"), goto: state.id };
-        }
-      }
     }
 
-    if (state.trigger && /^goto:/i.test(String(state.trigger.action || ""))) {
-      state.trigger.action = `goto:${state.id}`;
-    }
-    if (state.trigger && stateNum(state.id) > 1) {
-      const action = String(state.trigger.action || state.trigger.event || "");
-      if (isClickAction(action) || /^goto:/i.test(String(state.trigger.action || ""))) {
-        state.trigger.goto = state.id;
-      }
-    }
+    // Outbound triggers: the LLM emits a `triggers` array (current prompt shape).
+    const rawTriggers = Array.isArray(state.triggers) ? state.triggers : [];
+    let triggers = dedupeTriggers(rawTriggers.map((trig) => normalizeOutboundTrigger(trig, idToAnchor)));
+    // An outbound trigger must point to another state, never the state's own id.
+    state.triggers = triggers.filter((trig) => gotoStateNum(trig.goto) !== stateNum(state.id));
+    delete state.trigger;
 
     state.inheritance = { keep: [...keep], create, update: mergeLeafOriginalUpdates(update, registry, idToAnchor, treeInfo) };
-    state.patches = patchList.filter((patch) => patch?.type !== "hide" && patch?.type !== "replace"
-      && !(patch?.type === "bind" && isSystemBindAnchor(patchAnchor(patch))));
+    // Patches are no longer part of the model; interaction lives on `triggers`.
+    state.patches = [];
     // Reference height for "authored flush at the bottom" detection: the state's
     // own authored canvas height when present, else the initial viewport height.
     const bottomRef = Number(state.height) || Number(initialHeight) || 936;
@@ -1176,7 +1365,9 @@ function normalizeModel(model, initialHeight, registry = {}) {
       normalizeRichContentRequirements(patch);
       normalizeRichRequirements(patch);
       normalizeFixedViewportPatch(patch, initialHeight, bottomRef);
+      ensureFlowGroupForAnchoredPatch(patch);
       registerPatchTree(patch, virtualPatchById);
+      for (const cid of collectPatchIds(patch)) createdVirtualIds.add(cid);
     }
     for (const patch of state.inheritance.update) {
       const previousSpec = previousSpecForUpdate(patch, virtualPatchById, registry, idToAnchor);
@@ -1188,26 +1379,40 @@ function normalizeModel(model, initialHeight, registry = {}) {
       normalizeRichRequirements(patch);
       normalizeFixedViewportPatch(patch, initialHeight, bottomRef);
       normalizeUpdateModifications(patch, previousSpec, idToAnchor);
+      normalizeOriginalAnchorUpdatePatch(patch, registry, virtualPatchById);
       ensureOriginalUpdateRenderable(patch, state, registry, virtualPatchById);
       if (patch?.id || patch?.name) {
         const id = patch.id || patch.name;
-        // Cumulative ledger: this state's patch carries every modification
-        // since the original implementation, so its render is self-contained.
         const base = virtualPatchById.get(id) || previousSpec || {};
-        patch.modifications_applied = mergeModificationLists(
-          base.modifications_applied || base.modifications,
-          patch.modifications
-        );
-        virtualPatchById.set(id, { ...base, ...patch, props: { ...(base.props || {}), ...(patch.props || {}) } });
+        // Cumulative ledger: every change to this component since its original
+        // implementation (later wins, field-level merge). The virtualPatchById
+        // entry always tracks this so the NEXT state diffs/preserves correctly.
+        const cumulative = mergeModificationLists(base.modifications, patch.modifications);
+        const isOriginalAnchor = Boolean(registry?.semantic_dom_registry?.[id]) && !createdVirtualIds.has(id);
+        if (isOriginalAnchor) {
+          // Original DOM anchors are re-realised by page-layer replaying the
+          // cumulative ledger onto a fresh clone of the original pixels, so the
+          // emitted patch must carry every change since the original.
+          patch.modifications = cumulative;
+        } else {
+          // Virtual codegen components are carried forward across states by
+          // component-codegen (generatedById + lastChildrenById). Emit only this
+          // state's real delta; drop entries that merely restate an ancestor
+          // change so unchanged children are not needlessly re-generated.
+          let delta = dropRestatedModifications(patch.modifications, base.modifications);
+          if (!delta.length) {
+            delta = [makeModification("self", null, id,
+              "本状态未改变该组件，沿用上一状态实现")].filter(Boolean);
+          }
+          patch.modifications = delta;
+        }
+        virtualPatchById.set(id, {
+          ...base,
+          ...patch,
+          modifications: cumulative,
+          props: { ...(base.props || {}), ...(patch.props || {}) },
+        });
       }
-    }
-    for (const patch of state.patches) {
-      normalizePatchAnchorRefs(patch, idToAnchor);
-      normalizeNestedChildLayout(patch);
-      normalizeComponentProps(patch);
-      normalizeRichContentRequirements(patch);
-      normalizeRichRequirements(patch);
-      normalizeFixedViewportPatch(patch, initialHeight, bottomRef);
     }
     const requestedHeight = Number(state.height);
     const contentHeight = stateContentBottom(state);
@@ -1218,8 +1423,42 @@ function normalizeModel(model, initialHeight, registry = {}) {
     );
   }
 
-  autoKeepUpdatedCards(model, registry);
+  // NOTE: ancestor-updated cards are no longer auto-added to keep here. The
+  // page-layer runtime (tfEnsureUpdatedKeepSlots) discovers them at render time
+  // and mounts a slot when their region is kept, so this build-time pass is gone.
   return model;
+}
+
+// Original DOM anchor updates must NOT carry virtual-component fields
+// (component/layout/props). Placement is set_bbox/patch.bbox; content changes
+// live in modifications (+ optional children). Strip LLM mistakes here.
+function isRegistryOriginalAnchor(id, registry, virtualPatchById) {
+  return Boolean(id && registry?.semantic_dom_registry?.[id] && !virtualPatchById.has(id));
+}
+
+function selfSetBboxFromPatch(patch) {
+  const selfId = patch?.id || patch?.name;
+  for (const mod of (patch?.modifications || [])) {
+    if (!mod || !Array.isArray(mod.set_bbox) || mod.set_bbox.length !== 4) continue;
+    const t = String(mod.target || "");
+    if (!t || t === "self" || t === "bbox" || t === selfId || t === "children." + selfId) {
+      const bbox = mod.set_bbox.map(Number);
+      if (bbox.length === 4 && bbox.every(Number.isFinite)) return bbox;
+    }
+  }
+  return null;
+}
+
+function normalizeOriginalAnchorUpdatePatch(patch, registry, virtualPatchById) {
+  const id = patch?.id || patch?.name;
+  if (!isRegistryOriginalAnchor(id, registry, virtualPatchById)) return;
+  delete patch.component;
+  delete patch.layout;
+  delete patch.content_density;
+  delete patch.content_requirements;
+  delete patch.props;
+  const selfBbox = selfSetBboxFromPatch(patch);
+  if (selfBbox) patch.bbox = selfBbox;
 }
 
 // Original-anchor updates come in two patterns:
@@ -1232,8 +1471,9 @@ function normalizeModel(model, initialHeight, registry = {}) {
 // Only pattern A requires keep coverage.
 function isSelfRenderableUpdatePatch(patch) {
   if (validBbox(patch)) return true;
-  if (patch?.layout?.group) return true;
   if (patchChildren(patch).length) return true;
+  if (selfSetBboxFromPatch(patch)) return true;
+  if (patch?.layout?.group) return true;
   return false;
 }
 
@@ -1282,11 +1522,7 @@ function validateModel(model, registry) {
 
   if (!Array.isArray(model.states)) issues.push("missing states[]");
   const sorted = [...(model.states || [])].sort((a, b) => stateNum(a.id) - stateNum(b.id));
-
-  function isSystemTrigger(trigger) {
-    if (!trigger || typeof trigger !== "object") return false;
-    return /timeout|load_complete|submit_success|system|auto|data_loaded|success|完成|系统|自动/i.test(JSON.stringify(trigger));
-  }
+  const allStateNums = new Set(sorted.map((state) => stateNum(state.id)));
 
   for (const state of sorted) {
     if (!state.id) issues.push("state missing id");
@@ -1294,7 +1530,6 @@ function validateModel(model, registry) {
     const contentBottom = stateContentBottom(state);
     if (Number(state.height || 0) < contentBottom) issues.push(`${state.id} height ${state.height} smaller than content bottom ${contentBottom}`);
     if (stateNum(state.id) > 1 && !state.parent_state) issues.push(`${state.id} missing parent_state`);
-    if (stateNum(state.id) === 1 && !state.parent_state && state.trigger) issues.push(`${state.id} initial state must not define trigger`);
     if (stateNum(state.id) === 1 && !state.parent_state
       && ((state.inheritance?.create || []).length || (state.inheritance?.update || []).length)) {
       // state_1 is the original captured page rendered from app-root; page-layer
@@ -1302,24 +1537,39 @@ function validateModel(model, registry) {
       // dead. First-screen interactions must target original DOM anchors.
       issues.push(`${state.id} is the original captured page and must not create/update components; bind first-screen interactions to original DOM anchors instead`);
     }
-    if (stateNum(state.id) > 1 && state.trigger && !isSystemTrigger(state.trigger)) {
-      const triggerAction = state.trigger.action || state.trigger.event;
-      if (isClickAction(triggerAction)) {
-        const triggerTarget = gotoStateNum(state.trigger.goto) || gotoStateNum(state.trigger.action);
-        if (triggerTarget !== stateNum(state.id)) {
-          issues.push(`${state.id} click trigger must explicitly goto its own state id`);
+
+    // Validate outbound triggers (new model).
+    for (const trig of state.triggers || []) {
+      const gotoNum = gotoStateNum(trig?.goto);
+      if (!gotoNum || !allStateNums.has(gotoNum)) {
+        issues.push(`${state.id} trigger goto "${trig?.goto}" does not match any known state id`);
+      }
+      if (gotoNum === stateNum(state.id)) {
+        issues.push(`${state.id} trigger goto must point to a different state, not itself`);
+      }
+      if (trig?.action === "click" && !trig.anchor) {
+        issues.push(`${state.id} click trigger is missing an anchor`);
+      }
+      if (trig?.action === "click" && trig.anchor) {
+        // Anchor check deferred to after virtual ids are registered.
+      }
+    }
+    // state_1 click triggers must bind original DOM anchors only.
+    if (stateNum(state.id) === 1) {
+      for (const trig of state.triggers || []) {
+        if (trig?.action === "click" && trig.anchor && !originalAnchors.has(trig.anchor)) {
+          issues.push(`${state.id} trigger anchor "${trig.anchor}" must be an original DOM anchor on state_1`);
         }
       }
     }
+
     if (state.inheritance?.hide) issues.push(`${state.id} must not output inheritance.hide`);
     if (state.inheritance?.replace) issues.push(`${state.id} must not output inheritance.replace`);
     for (const patch of state.inheritance?.create || []) validatePatchShape(patch, state.id, issues);
     for (const patch of state.inheritance?.update || []) validatePatchShape(patch, state.id, issues);
-    for (const patch of state.patches || []) validatePatchShape(patch, state.id, issues);
     validateStateStacking(state, registry, virtualPatches, issues);
 
     const refs = [];
-    if (state.trigger?.anchor && !isSystemTrigger(state.trigger)) refs.push(state.trigger.anchor);
     for (const item of state.inheritance?.keep || []) {
       const anchor = typeof item === "string" ? item : patchAnchor(item);
       if (anchor) refs.push(anchor);
@@ -1344,6 +1594,11 @@ function validateModel(model, registry) {
       }
       if (!Array.isArray(patch?.preserve)) {
         issues.push(`${state.id}.${patchLabel} update patch requires a preserve array`);
+      }
+      if (anchor && originalAnchors.has(anchor) && !virtualAnchors.has(anchor)) {
+        if (patch.component || patch.layout) {
+          issues.push(`${state.id}.${patchLabel} original DOM anchor "${anchor}" must not carry component/layout; express placement via set_bbox/patch.bbox and content via modifications (optional children)`);
+        }
       }
       if (anchor && originalAnchors.has(anchor) && !virtualAnchors.has(anchor)
         && !isSelfRenderableUpdatePatch(patch)
@@ -1373,27 +1628,12 @@ function validateModel(model, registry) {
       }
       for (const child of patchChildren(patch)) registerPatchTree(child, virtualPatches);
     }
-    for (const patch of state.patches || []) {
-      if (patch.type === "create") {
-        collectPatchIds(patch).forEach((id) => virtualAnchors.add(id));
-        registerPatchTree(patch, virtualPatches);
-        const topId = patch?.id || patch?.name;
-        if (topId) topLevelCreatedIds.add(topId);
-        recordContainerChildren(patch, containerChildParent);
-      }
-      if (patch.type === "bind" && !patchGotoStateNum(patch)) issues.push(`${state.id} bind patch must include explicit goto state target`);
-      if (patch.type === "hide" || patch.type === "replace") issues.push(`${state.id} must not contain ${patch.type} patch`);
-    }
-    // A bind's anchor must resolve to a real element (original DOM anchor or a
-    // virtual component visible in this state), otherwise the runtime cannot
-    // attach the click and the transition is dead. Checked after all create ids
-    // above are registered into virtualAnchors.
-    for (const patch of state.patches || []) {
-      if (patch.type !== "bind") continue;
-      const bindAnchor = patch.anchor || patch.target_anchor;
-      if (typeof bindAnchor === "string" && bindAnchor
-        && !originalAnchors.has(bindAnchor) && !virtualAnchors.has(bindAnchor)) {
-        issues.push(`${state.id} bind references unknown anchor: ${bindAnchor}`);
+    // Trigger anchor check: defer until virtual ids for this state are
+    // registered above so a newly created component can be a valid anchor.
+    for (const trig of state.triggers || []) {
+      if (trig?.action === "click" && trig.anchor
+        && !originalAnchors.has(trig.anchor) && !virtualAnchors.has(trig.anchor)) {
+        issues.push(`${state.id} trigger anchor "${trig.anchor}" is unknown (not in original DOM anchors or previously created virtual components)`);
       }
     }
   }
@@ -1402,49 +1642,27 @@ function validateModel(model, registry) {
 }
 
 async function callLLM({ model, system, user, maxTokens }) {
-  loadDotEnv(path.join(SKILL_ROOT, ".env"));
-  loadDotEnv(path.join(ROOT, "backend", ".env"));
-  const apiKey = process.env.DASHSCOPE_API_KEY || process.env.OPENAI_API_KEY;
-  if (!apiKey) throw new Error("Missing DASHSCOPE_API_KEY or OPENAI_API_KEY");
-
-  const base = (process.env.DASHSCOPE_BASE_URL || "https://dashscope.aliyuncs.com/compatible-mode/v1").replace(/\/$/, "");
-  let lastErr;
-  for (let attempt = 1; attempt <= 4; attempt++) {
-    try {
-      const response = await fetch(base + "/chat/completions", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
-        body: JSON.stringify({
-          model,
-          messages: [{ role: "system", content: system }, { role: "user", content: user }],
-          temperature: Number(process.env.MODEL_TEMPERATURE ?? 0),
-          seed: Number(process.env.MODEL_SEED ?? 42),
-          max_tokens: maxTokens,
-          response_format: { type: "json_object" },
-        }),
-      });
-
-      const body = await response.text();
-      if (!response.ok) throw new Error(`LLM HTTP ${response.status}: ${body.slice(0, 1000)}`);
-      const json = JSON.parse(body);
-      return json.choices?.[0]?.message?.content || "";
-    } catch (err) {
-      lastErr = err;
-      if (attempt < 4) await new Promise((resolve) => setTimeout(resolve, attempt * 3000));
-    }
-  }
-  throw lastErr;
+  return callJsonChat({ model, system, user, maxTokens, label: "state-implementation-model" });
 }
 
 async function main() {
+  loadSkillEnv();
+  configureNodePath();
   const args = process.argv.slice(2);
-  const base = path.resolve(ROOT, args[0] || "new_test/2");
-  const model = argValue(args, "--model", "qwen3.7-max");
+  const cwd = process.cwd();
+  const base = resolveArgPath(args[0] || ".", cwd);
+  const model = resolveTextModel(argValue(args, "--model", ""));
   const width = Number(argValue(args, "--width", "360"));
   const height = Number(argValue(args, "--height", "792"));
-  const blueprintPath = path.resolve(ROOT, argValue(args, "--blueprint", latestBlueprint(base)));
-  const registryPath = path.resolve(ROOT, argValue(args, "--registry", path.join(base, ".preprocess", "semantic_registry.json")));
-  const out = path.resolve(ROOT, argValue(args, "--out", path.join(base, ".run_skill", "state_implementation", "state_implementation_model.llm.json")));
+  const blueprintPath = resolveArgPath(argValue(args, "--blueprint", latestBlueprint(base)), cwd);
+  const registryPath = resolveArgPath(
+    argValue(args, "--registry", path.join(base, ".preprocess", "semantic_registry.json")),
+    cwd,
+  );
+  const out = resolveArgPath(
+    argValue(args, "--out", path.join(base, ".run_skill", "state_implementation", "state_implementation_model.llm.json")),
+    cwd,
+  );
   const skillPath = path.resolve(__dirname, "..", "SKILL.md");
   const skill = readUtf8(skillPath);
   const blueprint = JSON.parse(readUtf8(blueprintPath));

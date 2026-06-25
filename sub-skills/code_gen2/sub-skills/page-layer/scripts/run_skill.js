@@ -6,17 +6,26 @@ const fsp = require("fs/promises");
 const path = require("path");
 const { chromium } = require("playwright");
 const { injectStateKeyNavIntoFile } = require("../../../../../scripts/inject_state_key_nav");
+const {
+  loadSkillEnv,
+  configureNodePath,
+  resolveArgPath,
+  exists,
+} = require("../../../../../scripts/paths");
+const { callJsonChat, resolveTextModel } = require("../../../../../scripts/llm_config");
 
-const ROOT = path.resolve(__dirname, "../../../../../../../..");
-const SKILL_ROOT = path.resolve(__dirname, "../../../../..");
+// Viewport width of the page being generated. Set once in main() from --width.
+// Used to derive a concrete bbox from a semantic layout.widthHint
+// (full-width / half-width-left / half-width-right) for ORIGINAL DOM anchor
+// updates whose placement changed but that did not get an explicit set_bbox.
+let TF_PAGE_WIDTH = 360;
 
 function readUtf8(file) { return fs.readFileSync(file, "utf8"); }
 function readJson(file) { return JSON.parse(readUtf8(file)); }
 function writeUtf8(file, text) { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, text, "utf8"); }
 function writeJson(file, value) { writeUtf8(file, JSON.stringify(value, null, 2)); }
-function exists(file) { return fs.existsSync(file); }
 function argValue(args, name, fallback) { const idx = args.indexOf(name); return idx >= 0 ? args[idx + 1] : fallback; }
-function rel(file) { return path.relative(ROOT, file).replace(/\\/g, "/"); }
+function rel(file) { return path.relative(process.cwd(), file).replace(/\\/g, "/"); }
 function stateNum(id) { const m = String(id || "").match(/(\d+)/); return m ? Number(m[1]) : 0; }
 function extractBlock(html, tag) { const m = String(html || "").match(new RegExp(`<${tag}\\b[^>]*>[\\s\\S]*?<\\/${tag}>`, "i")); return m ? m[0] : ""; }
 function extractBodyInner(html) { const m = String(html || "").match(/<body[^>]*>([\s\S]*?)<\/body>/i); return m ? m[1] : String(html || ""); }
@@ -28,19 +37,6 @@ function designSystemCss() {
     .replace(/@import[^\n]+\n/g, "")
     .replace(/@tailwind[^\n]+\n/g, "")
     .trim();
-}
-
-function loadDotEnv(file) {
-  if (!exists(file)) return;
-  for (const line of readUtf8(file).split(/\r?\n/)) {
-    const match = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)\s*$/);
-    if (!match) continue;
-    let value = match[2].trim();
-    if ((value.startsWith("\"") && value.endsWith("\"")) || (value.startsWith("'") && value.endsWith("'"))) {
-      value = value.slice(1, -1);
-    }
-    if (process.env[match[1]] == null) process.env[match[1]] = value;
-  }
 }
 
 function stripThink(text) {
@@ -57,36 +53,7 @@ function extractJson(text) {
 }
 
 async function callLLM({ model, system, user, maxTokens }) {
-  loadDotEnv(path.join(SKILL_ROOT, ".env"));
-  loadDotEnv(path.join(ROOT, "backend", ".env"));
-  const apiKey = process.env.DASHSCOPE_API_KEY || process.env.OPENAI_API_KEY;
-  if (!apiKey) throw new Error("Missing DASHSCOPE_API_KEY or OPENAI_API_KEY");
-  const base = (process.env.DASHSCOPE_BASE_URL || "https://dashscope.aliyuncs.com/compatible-mode/v1").replace(/\/$/, "");
-  let lastErr;
-  for (let attempt = 1; attempt <= 4; attempt++) {
-    try {
-      const response = await fetch(base + "/chat/completions", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
-        body: JSON.stringify({
-          model,
-          messages: [{ role: "system", content: system }, { role: "user", content: user }],
-          temperature: Number(process.env.MODEL_TEMPERATURE ?? 0),
-          seed: Number(process.env.MODEL_SEED ?? 42),
-          max_tokens: maxTokens,
-          response_format: { type: "json_object" },
-        }),
-      });
-      const body = await response.text();
-      if (!response.ok) throw new Error(`LLM HTTP ${response.status}: ${body.slice(0, 1000)}`);
-      const json = JSON.parse(body);
-      return json.choices?.[0]?.message?.content || "";
-    } catch (err) {
-      lastErr = err;
-      if (attempt < 4) await new Promise((resolve) => setTimeout(resolve, attempt * 3000));
-    }
-  }
-  throw lastErr;
+  return callJsonChat({ model, system, user, maxTokens, label: "page-layer" });
 }
 
 function slimRegistry(registry) {
@@ -112,13 +79,12 @@ function slimStateModel(model) {
       ui_intent: state.ui_intent,
       height: Number(state.height) || null,
       parent_state: state.parent_state,
-      trigger: state.trigger || null,
+      triggers: state.triggers || [],
       inheritance: {
         keep: state.inheritance?.keep || [],
         create: state.inheritance?.create || [],
         update: state.inheritance?.update || [],
       },
-      patches: state.patches || [],
     })),
   };
 }
@@ -270,6 +236,21 @@ function latestComponentRecordWithLayout(componentCodegen, id, stateId) {
     .sort((a, b) => componentRecordStateNum(b) - componentRecordStateNum(a))[0] || null;
 }
 
+// The latest record that actually carries a component SPEC. Reuse records
+// (operation "reuse"/"update" with only { reused_from }) drop input.component,
+// so they lose layout/bbox metadata. A kept component in a later state must
+// fall back to the most recent state that truly (re)generated it, otherwise it
+// renders unpositioned and collapses to the top of the layer.
+function latestComponentRecordWithSpec(componentCodegen, id, stateId) {
+  const current = stateNum(stateId);
+  return (componentCodegen?.components || [])
+    .filter((record) => componentRecordId(record) === id
+      && componentRecordStateNum(record) <= current
+      && record?.input?.component
+      && (record.input.component.id || record.input.component.name))
+    .sort((a, b) => componentRecordStateNum(b) - componentRecordStateNum(a))[0] || null;
+}
+
 function isTopLevelComponentRecord(record) {
   return record?.input?.is_top_level !== false;
 }
@@ -295,17 +276,78 @@ function originalAnchorUpdatePatch(state, registry, id) {
 // update that introduces structure or content the clone cannot express
 // (children, rich content, business props) goes through component-codegen,
 // which regenerates the whole card from the patch.
+function patchModifications(patch) {
+  return [
+    ...(Array.isArray(patch?.modifications_applied) ? patch.modifications_applied : []),
+    ...(Array.isArray(patch?.modifications) ? patch.modifications : []),
+  ];
+}
+
+// Machine-applicable set_props keys for original-DOM keep clones (same set
+// tfApplyCardLedgers can apply at runtime without regenerating the card).
+const ORIGINAL_ANCHOR_SIMPLE_PROP_KEYS = /^(color|opacity|visibility|display|fontSize|fontWeight|fontStyle|backgroundColor|layoutRole|zIndex|clearable|checked|selected)$/i;
+
+// A single modification on an original DOM anchor that tfApplyCardLedgers can
+// apply inside the keep clone: set_text / set_bbox / set_text_style, optional
+// cosmetic set_props, or delete. Metadata-only entries (change/target_component
+// with no set_* payload) are no-ops and also skip codegen. Child paths like
+// "children.<domId>" are allowed when the payload is simple.
+function isSimpleOriginalAnchorModification(mod) {
+  if (!mod || typeof mod !== "object") return true;
+  if (String(mod.type || "") === "create") return false;
+  if (String(mod.type || "") === "delete") return true;
+  const hasText = typeof mod.set_text === "string";
+  const hasBbox = Array.isArray(mod.set_bbox) && mod.set_bbox.length === 4;
+  const hasStyle = mod.set_text_style && typeof mod.set_text_style === "object" && !Array.isArray(mod.set_text_style);
+  const sp = mod.set_props && typeof mod.set_props === "object" && !Array.isArray(mod.set_props) ? mod.set_props : null;
+  if (sp) {
+    const keys = Object.keys(sp);
+    if (keys.some((key) => !ORIGINAL_ANCHOR_SIMPLE_PROP_KEYS.test(key))) return false;
+  }
+  if (!hasText && !hasBbox && !hasStyle && !sp) return true;
+  return true;
+}
+
+// Original DOM anchor updates: only regenerate when the patch introduces
+// structure/content the keep clone cannot express. Simple text/bbox/style (and
+// cosmetic prop) deltas are applied at runtime in tfApplyCardLedgers.
+function originalAnchorUpdateNeedsCodegen(patch) {
+  if (Array.isArray(patch?.children) && patch.children.length) return true;
+  if (String(patch?.content_density || "").toLowerCase() === "rich") return true;
+  const props = patch?.props && typeof patch.props === "object" && !Array.isArray(patch.props) ? patch.props : {};
+  if (Object.keys(props).some((key) => !/^(layoutRole|zIndex)$/i.test(key))) return true;
+  for (const mod of patchModifications(patch)) {
+    if (!isSimpleOriginalAnchorModification(mod)) return true;
+  }
+  return false;
+}
+
 function updateNeedsCodegen(patch) {
   if (Array.isArray(patch?.children) && patch.children.length) return true;
   if (String(patch?.content_density || "").toLowerCase() === "rich") return true;
   const props = patch?.props && typeof patch.props === "object" && !Array.isArray(patch.props) ? patch.props : {};
-  return Object.keys(props).some((key) => !/^(layoutRole|zIndex)$/i.test(key));
+  if (Object.keys(props).some((key) => !/^(layoutRole|zIndex)$/i.test(key))) return true;
+  for (const mod of patchModifications(patch)) {
+    if (!mod || typeof mod !== "object") continue;
+    if (String(mod.type || "") === "create") return true;
+    if (mod.target_component) return true;
+    const target = String(mod.target || "");
+    if (target === "children" || target.startsWith("children.")) return true;
+    if (target === "props" || target.startsWith("props.")) return true;
+    const sp = mod.set_props && typeof mod.set_props === "object" && !Array.isArray(mod.set_props) ? mod.set_props : null;
+    if (sp) {
+      const keys = Object.keys(sp);
+      if (keys.some((key) => /^(variant|items|loading|skeleton|body|sections|filters|activeId|title|moreText|primaryLabel|disabled)$/i.test(key))) return true;
+      if (keys.some((key) => !/^(color|opacity|visibility|display|fontSize|fontWeight|fontStyle|backgroundColor|layoutRole|zIndex|clearable|checked|selected)$/i.test(key))) return true;
+    }
+  }
+  return false;
 }
 
 function isOriginalAnchorUpdate(state, registry, id) {
   const patch = originalAnchorUpdatePatch(state, registry, id);
   if (!patch) return false;
-  return !updateNeedsCodegen(patch);
+  return !originalAnchorUpdateNeedsCodegen(patch);
 }
 
 function stateExpectedComponentIds(state, componentCodegen, registry) {
@@ -385,6 +427,65 @@ function flowLayoutGroupsForState(state, componentCodegen, registry) {
     group,
     specs: specs.sort((a, b) => Number(a.layout?.order || 0) - Number(b.layout?.order || 0)),
   }));
+}
+
+// Merge "chained" flow groups: when group B's startAnchor points to a member
+// that lives inside another flow group A (an auto-height member with no bbox),
+// the static `flowGroupTop` cannot measure A's rendered bottom and would place
+// B at the page top — overlapping A. Instead we splice B's specs into A so the
+// whole chain renders as ONE absolutely-positioned flex column and stacks
+// naturally. The merged group inherits A's head spec (resolvable bbox anchor)
+// for top/spacing, and concatenates each original group's already order-sorted
+// specs in chain order (anchor-owner first), so cross-group `order` values
+// never reshuffle members across the boundary.
+function mergedFlowLayoutGroupsForState(state, componentCodegen, registry) {
+  const groups = flowLayoutGroupsForState(state, componentCodegen, registry);
+  if (groups.length <= 1) return groups;
+  const idToGroupIdx = new Map();
+  groups.forEach((group, idx) => {
+    for (const spec of group.specs) idToGroupIdx.set(spec.id || spec.name, idx);
+  });
+  // predecessor[idx] = index of the group that owns this group's startAnchor.
+  const predecessor = new Array(groups.length).fill(-1);
+  const successors = new Map();
+  groups.forEach((group, idx) => {
+    const anchor = flowStartAnchor(group);
+    if (!anchor) return;
+    const ownerIdx = idToGroupIdx.get(anchor);
+    if (ownerIdx == null || ownerIdx === idx) return;
+    predecessor[idx] = ownerIdx;
+    if (!successors.has(ownerIdx)) successors.set(ownerIdx, []);
+    successors.get(ownerIdx).push(idx);
+  });
+  const visited = new Set();
+  const merged = [];
+  const walk = (idx, chainSpecs, chainNames) => {
+    if (visited.has(idx)) return;
+    visited.add(idx);
+    for (const spec of groups[idx].specs) chainSpecs.push(spec);
+    chainNames.push(groups[idx].group);
+    for (const succ of (successors.get(idx) || []).slice().sort((a, b) => a - b)) {
+      walk(succ, chainSpecs, chainNames);
+    }
+  };
+  groups.forEach((group, idx) => {
+    if (predecessor[idx] >= 0 || visited.has(idx)) return; // only start chains at heads
+    const chainSpecs = [];
+    const chainNames = [];
+    walk(idx, chainSpecs, chainNames);
+    if (chainNames.length <= 1) {
+      merged.push(group);
+    } else {
+      merged.push({ group: chainNames.join("+"), groups: chainNames, specs: chainSpecs, merged: true });
+    }
+  });
+  // Safety: any group left unvisited (e.g. an anchor cycle) is emitted as-is.
+  groups.forEach((group, idx) => {
+    if (visited.has(idx)) return;
+    visited.add(idx);
+    merged.push(group);
+  });
+  return merged;
 }
 
 function flowLayoutIdsForState(state, componentCodegen, registry) {
@@ -471,7 +572,7 @@ function flowGroupPlaceholder(group, state, registry, componentCodegen, override
 }
 
 function componentPlaceholdersForState(state, componentCodegen, registry, overrides = null) {
-  const groups = flowLayoutGroupsForState(state, componentCodegen, registry);
+  const groups = mergedFlowLayoutGroupsForState(state, componentCodegen, registry);
   if (!groups.length) return stateExpectedComponentIds(state, componentCodegen, registry).map(componentPlaceholder).join("");
   const groupById = new Map();
   for (const group of groups) {
@@ -495,25 +596,6 @@ function componentPlaceholdersForState(state, componentCodegen, registry, overri
 
 function escapeHtmlAttr(value) {
   return String(value).replace(/&/g, "&amp;").replace(/"/g, "&quot;");
-}
-
-function restoreSemanticMasks(html) {
-  return String(html || "").replace(
-    /(<!-- bbox: key=id:([^|\s]+)\s*\|\s*x=([-\d.]+)\s+y=([-\d.]+)\s+w=([-\d.]+)\s+h=([-\d.]+)\s*-->\s*<!-- semantic:[^>]*semantic=全屏半透明遮罩层[^>]*-->)(?!\s*<div\b[^>]*\bid=["'][^"']+["'])/g,
-    (match, comments, id, x, y, w, h) => {
-      if (new RegExp(`id=["']${escapeRegExp(id)}["']`).test(html)) return match;
-      const style = [
-        "position:absolute",
-        `left:${Number(x) || 0}px`,
-        `top:${Number(y) || 0}px`,
-        `width:${Number(w) || 0}px`,
-        `height:${Number(h) || 0}px`,
-        "background-color:rgba(0,0,0,0.295)",
-        "pointer-events:none",
-      ].join(";");
-      return `${comments}\n<div id="${escapeHtmlAttr(id)}" class="tf-restored-semantic-mask" style="${style}"></div>`;
-    }
-  );
 }
 
 function escapeHtmlText(value) {
@@ -541,6 +623,53 @@ function directPatchForComponent(state, id) {
   return null;
 }
 
+// Extract a self/anchor-targeted set_bbox from an update patch's modification
+// ledger: a modification whose target is the patch root itself (empty, "self",
+// "bbox", the patch id, or "children.<patchId>") carrying a 4-tuple set_bbox.
+// This is the placement an original-anchor update declares for ITSELF.
+function selfBboxFromPatch(patch) {
+  if (!patch) return null;
+  const selfId = patch.id || patch.name;
+  const lists = [patch.modifications_applied, patch.modifications];
+  for (const list of lists) {
+    if (!Array.isArray(list)) continue;
+    for (const mod of list) {
+      if (!mod || !Array.isArray(mod.set_bbox) || mod.set_bbox.length !== 4) continue;
+      const t = String(mod.target || "");
+      if (!t || t === "self" || t === "bbox" || t === selfId || t === "children." + selfId) {
+        const bbox = mod.set_bbox.map(Number);
+        if (validBboxArray(bbox)) return bbox;
+      }
+    }
+  }
+  return null;
+}
+
+function widthHintChanged(direct, previous) {
+  const cur = String(direct?.layout?.widthHint || "");
+  if (!cur) return false;
+  return cur !== String(previous?.layout?.widthHint || "");
+}
+
+// Derive a concrete [x,y,w,h] from a semantic widthHint, reusing the y/height of
+// a base bbox (previous or registry placement). Keeps absolute positioning while
+// only changing the WIDTH band (full vs half-left vs half-right). 16px side
+// margins and a 12px inter-column gap match the flow-group padding.
+function deriveBboxFromWidthHint(direct, baseBbox) {
+  const hint = String(direct?.layout?.widthHint || "").toLowerCase();
+  if (!hint || !Array.isArray(baseBbox) || baseBbox.length !== 4) return null;
+  const [, y, , h] = baseBbox.map(Number);
+  if (![y, h].every(Number.isFinite)) return null;
+  const side = 16;
+  const gap = 12;
+  const full = Math.max(0, TF_PAGE_WIDTH - side * 2);
+  const half = Math.max(0, Math.round((full - gap) / 2));
+  if (/full|safe-area|content-column/.test(hint)) return [side, y, full, h];
+  if (/right/.test(hint)) return [side + half + gap, y, half, h];
+  if (/left|half/.test(hint)) return [side, y, half, h];
+  return null;
+}
+
 function componentLayoutSpec(state, componentCodegen, id, registry) {
   const direct = directPatchForComponent(state, id);
   if (direct) {
@@ -549,15 +678,34 @@ function componentLayoutSpec(state, componentCodegen, id, registry) {
       || latestComponentRecordWithLayout(componentCodegen, id, state.id)
     )?.input?.component || {};
     const registryBbox = bboxForAnchor(registry, id);
+    // Placement priority for an original/virtual anchor update:
+    //   1. explicit patch.bbox
+    //   2. a self-targeted set_bbox in the modification ledger
+    //   3. when the patch declares a NEW widthHint, derive the band from the
+    //      previous/registry bbox (never silently fall back to the OLD width)
+    //   4. previous bbox, then registry bbox
+    const baseBbox = Array.isArray(previous.bbox) ? previous.bbox : registryBbox;
+    const selfBbox = selfBboxFromPatch(direct);
+    const derived = (!selfBbox && !Array.isArray(direct.bbox) && widthHintChanged(direct, previous))
+      ? deriveBboxFromWidthHint(direct, baseBbox)
+      : null;
+    // Self-targeted set_bbox in the modification ledger beats a stale patch.bbox
+    // copied from registry (e.g. half-width 156 still on patch while set_bbox
+    // declares full-width 328).
+    const resolvedBbox = selfBbox
+      || (Array.isArray(direct.bbox) ? direct.bbox : null)
+      || derived
+      || previous.bbox
+      || registryBbox;
     return {
       ...previous,
       ...direct,
-      bbox: Array.isArray(direct.bbox) ? direct.bbox : (previous.bbox || registryBbox),
+      bbox: resolvedBbox,
       layout: direct.layout || previous.layout,
       props: { ...(previous.props || {}), ...(direct.props || {}) },
     };
   }
-  const latest = latestComponentRecord(componentCodegen, id, state.id)?.input?.component || null;
+  const latest = latestComponentRecordWithSpec(componentCodegen, id, state.id)?.input?.component || null;
   if (!latest) return null;
   const previous = (
     (Array.isArray(latest.bbox) ? null : latestComponentRecordWithBbox(componentCodegen, id, state.id))
@@ -684,6 +832,12 @@ function explicitComponentZIndex(spec) {
   return Number.isFinite(zIndex) ? zIndex : null;
 }
 
+// Highest z-index used by the runtime keep layer (tfKeepZIndexFor returns 0 for
+// background/decoration keeps and 1 for normal keeps). Regenerated original-anchor
+// update frames must sit ABOVE this to not be occluded by their kept ancestor
+// container.
+const KEEP_LAYER_TOP_Z = 1;
+
 // Pixels by which a measured natural content height must undercut the authored
 // bbox height before the runner shrinks a frame. Avoids churn on rounding noise.
 const HEIGHT_FIT_TOLERANCE = 6;
@@ -696,6 +850,38 @@ const MEDIA_COMPONENT_RE = /(carousel|swiper|slider|gallery|banner|hero|cover|im
 
 function isMediaSpec(spec) {
   return MEDIA_COMPONENT_RE.test(String(spec?.component || spec?.id || spec?.name || ""));
+}
+
+// True when this state's update on an original anchor explicitly SET an opaque
+// background fill (e.g. a video region whose cover image is swapped for a black
+// playback surface via set_props.background:#000000). The fill IS the intended
+// display, so the authored bbox height is meaningful: content-height auto-fit
+// would see only the overlaid controls and wrongly collapse the region. Such
+// containers must keep their authored bbox height, like media components.
+function CSS_TRANSPARENT_VALUE_RE() {
+  return /^(transparent|none|inherit|initial|unset)$/i;
+}
+function isOpaqueBackgroundValue(value) {
+  const val = String(value == null ? "" : value).trim();
+  if (!val || CSS_TRANSPARENT_VALUE_RE().test(val)) return false;
+  // A fully transparent rgba()/hsla() (alpha 0) is not an opaque fill.
+  if (/(?:rgba|hsla)\([^)]*,\s*0(?:\.0+)?\s*\)/i.test(val)) return false;
+  return true;
+}
+function updateSetsExplicitBackground(state, registry, id) {
+  const patch = originalAnchorUpdatePatch(state, registry, id);
+  if (!patch) return false;
+  for (const mod of patchModifications(patch)) {
+    const sp = mod && typeof mod === "object" && mod.set_props
+      && typeof mod.set_props === "object" && !Array.isArray(mod.set_props)
+      ? mod.set_props : null;
+    if (!sp) continue;
+    for (const key of Object.keys(sp)) {
+      if (!/^background(-?color)?$/i.test(key)) continue;
+      if (isOpaqueBackgroundValue(sp[key])) return true;
+    }
+  }
+  return false;
 }
 
 function heightOverrideFor(overrides, stateNumValue, id) {
@@ -1021,18 +1207,15 @@ function flowPlaceholderRegex(id) {
 function normalizeFlowLayoutPlaceholders(generated, stateModel, componentCodegen, registry) {
   if (!generated || typeof generated.html !== "string") return generated;
   let changed = false;
-  const suppressRules = [];
   generated.html = generated.html.replace(/<section\b[^>]*id=["']tf-state-(\d+)["'][\s\S]*?<\/section>/g, (sectionHtml, n) => {
     const state = (stateModel.states || []).find((item) => stateNum(item.id) === Number(n));
     if (!state) return sectionHtml;
-    const groups = flowLayoutGroupsForState(state, componentCodegen, registry);
+    const groups = mergedFlowLayoutGroupsForState(state, componentCodegen, registry);
     if (!groups.length) return sectionHtml;
-    for (const group of groups) {
-      for (const spec of group.specs) {
-        const safe = cssAttr(spec.id || spec.name);
-        suppressRules.push(`#tf-state-${Number(n)} > [data-component-id="${safe}"],#tf-state-${Number(n)} > [data-component-frame="${safe}"]{display:none!important;visibility:hidden!important;pointer-events:none!important}`);
-      }
-    }
+    // Grouped specs live ONLY inside the tf-flow-group div (the Option A skeleton
+    // nests them, and the missingGroups branch below regex-removes any root-level
+    // flow placeholders before inserting the group), so no root-level duplicates
+    // remain to hide — the former suppressRules CSS hide-hack is gone.
     const missingGroups = groups.filter((group) => !new RegExp(`\\bdata-flow-group=["']${escapeRegExp(group.group)}["']`).test(sectionHtml));
     if (!missingGroups.length) return sectionHtml;
     let next = sectionHtml;
@@ -1066,9 +1249,6 @@ function normalizeFlowLayoutPlaceholders(generated, stateModel, componentCodegen
     generated.validation_notes = [generated.validation_notes, "Runner normalized flow layout placeholders into positioned groups."]
       .filter(Boolean)
       .join(" ");
-  }
-  if (suppressRules.length) {
-    generated.css = `${generated.css || ""}\n/* Hide stale root-level flow components when a flow group owns their layout. */\n${[...new Set(suppressRules)].join("\n")}`;
   }
   return generated;
 }
@@ -1208,6 +1388,19 @@ function normalizeComponentFrameCss(generated, stateModel, componentCodegen, reg
       })
       .filter((value) => Number.isFinite(value));
     const coveringOverlayMinZ = coveringOverlayZ.length ? Math.min(...coveringOverlayZ) : null;
+    // Bboxes of all original-anchor update frames that will be lifted to the card
+    // layer. A frame geometrically CONTAINED by another such frame (e.g. the
+    // 导航标签栏 tab bar inside the 新闻内容列表区 region, both pinned at y=220)
+    // must paint ABOVE its container — same containment rule the keep layer uses
+    // — or the larger opaque frame hides the smaller one.
+    const cardFrameBoxes = [];
+    for (const id of stateExpectedComponentIds(state, componentCodegen, registry)) {
+      if (!originalAnchorUpdatePatch(state, registry, id)) continue;
+      const spec = componentLayoutSpec(state, componentCodegen, id, registry);
+      if (isCoveringOverlaySpec(spec) || isViewportFixedSpec(spec)) continue;
+      const bb = Array.isArray(spec?.bbox) ? spec.bbox.map(Number) : null;
+      if (validBboxArray(bb)) cardFrameBoxes.push({ id, bbox: bb });
+    }
     for (const id of stateExpectedComponentIds(state, componentCodegen, registry)) {
       const spec = componentLayoutSpec(state, componentCodegen, id, registry);
       const bbox = Array.isArray(spec?.bbox) ? spec.bbox.map(Number) : null;
@@ -1224,6 +1417,28 @@ function normalizeComponentFrameCss(generated, stateModel, componentCodegen, reg
       if (keepIds.has(id) && !activeIds.has(id) && isBottomActionBarSpec(spec)
         && Number.isFinite(coveringOverlayMinZ) && Number.isFinite(zIndex) && zIndex >= coveringOverlayMinZ) {
         zIndex = coveringOverlayMinZ - 1;
+      }
+      // Original-anchor UPDATES regenerated by component-codegen (e.g. a card
+      // whose children were swapped for a skeleton / fresh content) render as a
+      // component frame, but their kept ANCESTOR container (e.g. 新闻内容区容器)
+      // sits at the keep layer (z 0..1) and would paint over them, leaving the
+      // content blank. Lift these regenerated update frames above the keep layer
+      // so they show on top of (and visually replace) the kept container region.
+      // Stay below any covering overlay (mask / sheet / dialog) so they never
+      // punch through a modal.
+      if (originalAnchorUpdatePatch(state, registry, id) && !isCoveringOverlaySpec(spec) && !isViewportFixedSpec(spec)) {
+        const lift = Math.max(Number.isFinite(zIndex) ? zIndex : 0, KEEP_LAYER_TOP_Z + 1);
+        zIndex = Number.isFinite(coveringOverlayMinZ) ? Math.min(lift, coveringOverlayMinZ - 1) : lift;
+        // Lift once more for each other card-layer frame that contains this one,
+        // so a smaller, more specific update frame paints above its container.
+        let depth = 0;
+        for (const other of cardFrameBoxes) {
+          if (other.id !== id && bboxContainsBbox(other.bbox, bbox)) depth++;
+        }
+        if (depth > 0) {
+          const lifted = zIndex + depth;
+          zIndex = Number.isFinite(coveringOverlayMinZ) ? Math.min(lifted, coveringOverlayMinZ - 1) : lifted;
+        }
       }
       const heightOverride = heightOverrideFor(overrides, stateId, id);
       const style = importantInlineStyle(componentFrameStyle(spec, zIndex, heightOverride));
@@ -1386,7 +1601,11 @@ function normalizeKeepPlaceholderCss(generated) {
 
 function buildHtml({ originalHtml, registry, generated, stateModel, width, height }) {
   const head = extractBlock(originalHtml, "head") || "<head><meta charset=\"utf-8\"></head>";
-  const body = restoreSemanticMasks(extractBodyInner(originalHtml));
+  // NOTE: the base page is the CLEAN initial state. Any full-screen popup
+  // backdrop ("全屏半透明遮罩层") that exists in the source D2C must NOT be
+  // re-injected here, or it pollutes state_1 and every keep clone. Popup states
+  // create their own overlay (overlay_mask) explicitly via the state model.
+  const body = extractBodyInner(originalHtml);
   const runtimeModel = slimStateModel(stateModel);
   const stateLayerCss = (stateModel.states || [])
     .map((state) => {
@@ -1424,7 +1643,7 @@ ${head}
 <style id="tf-llm-base-style">
 .tf-state-layer{position:fixed!important;left:0!important;top:0!important;width:${width}px!important;height:100vh!important;z-index:9999!important;background:#f5f5f5;color:#1f1f1f;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;overflow-y:auto;overflow-x:hidden;padding-bottom:88px}
 .tf-llm-layer *{box-sizing:border-box}
-.tf-keep-placeholder{position:absolute;overflow:hidden;pointer-events:none;z-index:0!important}
+.tf-keep-placeholder{position:absolute;overflow:hidden;pointer-events:none;z-index:0}
 .tf-keep-placeholder>.tf-keep-crop{position:absolute;pointer-events:none}
 .tf-component-frame{position:absolute;box-sizing:border-box}
 /* Frames and flow groups are layout wrappers, not interactive surfaces. An
@@ -1559,77 +1778,166 @@ function tfFillVirtualKeep(slot, layer, anchor){
   }
   return false;
 }
+// Keep-slot stacking. Background / decorative / mask regions sit at the bottom
+// so more specific chrome (status bar, title bar) and content keeps paint above
+// them. Without this, a large background keep emitted later in the DOM would
+// paint over and occlude the smaller status/title keeps it overlaps.
+function tfKeepZIndexFor(anchor){
+  if(/背景|装饰|遮罩|底图|蒙版|mask|overlay|backdrop|decorat|background/i.test(String(anchor||""))) return 0;
+  return 1;
+}
+// True when box a geometrically CONTAINS box b (1px tolerance) and is strictly
+// larger by area. Used to detect container keeps that wrap leaf keeps.
+function tfBoxContains(a, b){
+  if(!a||!b) return false;
+  const ax=a[0],ay=a[1],aw=a[2],ah=a[3],bx=b[0],by=b[1],bw=b[2],bh=b[3];
+  if(!(aw*ah>bw*bh)) return false;
+  return ax-1<=bx && ay-1<=by && (ax+aw+1)>=(bx+bw) && (ay+ah+1)>=(by+bh);
+}
+// Build a per-layer keep z-index map from CONTAINMENT, not just names. A keep
+// whose box wraps another keep's box is a container and must render BELOW the
+// keep(s) it contains, so e.g. a 新闻内容区容器 that wraps the 导航标签栏 tab bar
+// (both pinned at y=220) does not paint over and hide it. Backgrounds / masks
+// stay at the bottom (0); leaf keeps sit on top (1); the card layer (z>=2) is
+// reserved for regenerated update frames above all keeps.
+function tfKeepZIndexMap(layer, registry){
+  const slots=Array.prototype.slice.call(layer.querySelectorAll("[data-keep-anchor]"));
+  const stateNumber=tfNum(layer.id);
+  const boxes=slots.map(function(slot){
+    const anchor=slot.getAttribute("data-keep-anchor");
+    const bbox=tfLatestKeepBbox(anchor, stateNumber);
+    return { anchor:anchor, bbox:bbox };
+  });
+  // Card-layer codegen update frames sit ABOVE the keep layer (z>=2) so they can
+  // visually replace their kept ancestor container. But such a frame can also
+  // geometrically CONTAIN a sibling keep that overlaps its top band — e.g. the
+  // 新闻内容列表区 update frame (y=220) contains the 导航标签栏 tab bar (also
+  // y=220). Without a counter-lift the opaque regenerated content paints over and
+  // hides that keep. Collect those frames so a contained keep is lifted back on
+  // top of them. Overlays / sheets (z>=40) are excluded — keeps stay below modals.
+  const cardFrames=[];
+  Array.prototype.slice.call(layer.querySelectorAll(".tf-component-frame[data-component-frame]")).forEach(function(fr){
+    const z=parseInt((getComputedStyle(fr).zIndex||""),10);
+    if(!isFinite(z)||z<=1||z>=40) return;
+    const x=parseFloat(fr.style.left), y=parseFloat(fr.style.top),
+          w=parseFloat(fr.style.width), h=parseFloat(fr.style.height);
+    if([x,y,w,h].some(function(n){ return !isFinite(n); })) return;
+    cardFrames.push({ z:z, bbox:[x,y,w,h] });
+  });
+  const map={};
+  boxes.forEach(function(item){
+    if(/背景|装饰|遮罩|底图|蒙版|mask|overlay|backdrop|decorat|background/i.test(String(item.anchor||""))){ map[item.anchor]=0; return; }
+    let isContainer=false;
+    if(item.bbox){
+      for(const other of boxes){
+        if(other===item||!other.bbox) continue;
+        if(tfBoxContains(item.bbox, other.bbox)){ isContainer=true; break; }
+      }
+    }
+    let z=isContainer?0:1;
+    if(item.bbox){
+      for(const cf of cardFrames){
+        if(tfBoxContains(cf.bbox, item.bbox)) z=Math.max(z, cf.z+1);
+      }
+    }
+    map[item.anchor]=z;
+  });
+  return map;
+}
+// Prune a full-page clone down to the spine from the clone root to target
+// PLUS target's own subtree: at every level along that path, drop every element
+// sibling that is not on the path. This keeps each positioned / flow ancestor
+// intact (so the target's layout context — relative OR absolute — is preserved
+// and we never hit the "absolutely-positioned child lost its positioned
+// ancestor" problem), while deleting all unrelated branches so the keep can
+// never reveal neighbouring base content.
+function tfPruneToSpine(rootClone, target){
+  let node=target;
+  while(node && node!==rootClone){
+    const parent=node.parentNode;
+    if(!parent) break;
+    let child=parent.firstChild;
+    while(child){
+      const next=child.nextSibling;
+      if(child!==node && child.nodeType===1) parent.removeChild(child);
+      child=next;
+    }
+    node=parent;
+  }
+}
 function tfFillKeepPlaceholders(layer){
   if(!layer) return;
   const appRoot=document.getElementById("app-root");
+  const registry=window.__TF_REGISTRY__ || {};
+  const zmap=tfKeepZIndexMap(layer, registry);
+  const zfor=function(a){ return Number.isFinite(zmap[a]) ? zmap[a] : tfKeepZIndexFor(a); };
+  const stateNumber=tfNum(layer.id);
   layer.querySelectorAll("[data-keep-anchor]").forEach(function(slot){
     const anchor=slot.getAttribute("data-keep-anchor");
-    const registry=window.__TF_REGISTRY__ || {};
-    const bbox=registry[anchor] && registry[anchor].bbox;
+    const entry=registry[anchor] || {};
     slot.innerHTML="";
-    if(!Array.isArray(bbox) || !appRoot) {
-      tfFillVirtualKeep(slot, layer, anchor);
-      return;
+    slot.style.zIndex=String(zfor(anchor));
+    // Slot geometry comes from the single newest-bbox resolver (ledgered move,
+    // else registry bbox); no data-keep-override attribute round-trip.
+    const slotBox=tfLatestKeepBbox(anchor, stateNumber);
+    if(!appRoot){ tfFillVirtualKeep(slot, layer, anchor); slot.style.zIndex=String(zfor(anchor)); return; }
+    // Clone the WHOLE page, then prune to the root->anchor spine (+ the anchor's
+    // own subtree). The pruned clone keeps the anchor's full positioning context
+    // so its inner layout is identical to the original, and every unrelated
+    // branch is gone so nothing else can show through this keep window.
+    const fullClone=appRoot.cloneNode(true);
+    let target=null;
+    if(entry.selector){ try{ target=fullClone.querySelector(entry.selector); }catch(e){} }
+    if(!target && entry.id){ try{ target=fullClone.querySelector("#"+tfCssEscape(entry.id)); }catch(e){} }
+    if(!target){ tfFillVirtualKeep(slot, layer, anchor); slot.style.zIndex=String(zfor(anchor)); return; }
+    tfPruneToSpine(fullClone, target);
+    if(slotBox){
+      slot.style.left=slotBox[0]+"px";
+      slot.style.top=slotBox[1]+"px";
+      slot.style.width=slotBox[2]+"px";
+      slot.style.height=slotBox[3]+"px";
     }
-    // A reposition slot shows the ORIGINAL region's clone at a NEW position:
-    // the slot box comes from data-keep-override (patch bbox) while the crop
-    // offset still uses the registry bbox so the original pixels are shown.
-    const override=(slot.getAttribute("data-keep-override")||"").split(",").map(Number);
-    const hasOverride=override.length===4 && override.every(function(n){ return Number.isFinite(n); });
-    const slotBox=hasOverride?override:[Number(bbox[0]||0),Number(bbox[1]||0),Number(bbox[2]||0),Number(bbox[3]||0)];
-    slot.style.left=slotBox[0]+"px";
-    slot.style.top=slotBox[1]+"px";
-    slot.style.width=slotBox[2]+"px";
-    slot.style.height=slotBox[3]+"px";
     const crop=document.createElement("div");
     crop.className="tf-keep-crop";
-    crop.style.left=(-Number(bbox[0]||0))+"px";
-    crop.style.top=(-Number(bbox[1]||0))+"px";
-    crop.style.width="${width}px";
-    // The crop is the cloned page's canvas, not the clipping window (the slot
-    // clips). The original page is often taller than the capture viewport, so
-    // size the canvas to the full app-root content height or every kept
-    // region below the viewport line renders blank.
-    crop.style.height=Math.max(${height}, appRoot.scrollHeight||0)+"px";
-    Array.prototype.forEach.call(appRoot.childNodes,function(node){ crop.appendChild(node.cloneNode(true)); });
+    crop.style.position="absolute";
+    crop.style.left="0px";
+    crop.style.top="0px";
+    crop.style.width=(appRoot.offsetWidth||appRoot.scrollWidth||360)+"px";
+    fullClone.style.position="static";
+    fullClone.style.margin="0";
+    crop.appendChild(fullClone);
     slot.appendChild(crop);
+    // Shift the pruned clone so the anchor's OWN box lands at the slot origin.
+    // Measured live (the layer is shown before keep fill), which works for both
+    // flow and absolute layouts regardless of how pruning changed the flow.
+    const tRect=target.getBoundingClientRect();
+    const sRect=slot.getBoundingClientRect();
+    if(tRect && sRect){
+      crop.style.left=(sRect.left - tRect.left)+"px";
+      crop.style.top=(sRect.top - tRect.top)+"px";
+    }
   });
-}
-// Unified card-update rendering. A card update's render = clone of the card's
-// previous implementation (the original region) + the patch's cumulative
-// modification ledger applied inside the clone. The slot carries
-// data-component-id so the card is addressable as the NEWEST version by later
-// states and binds. Moved cards simply carry a new bbox (data-keep-override).
-function tfMountUpdatedOriginalCards(layer){
-  if(!layer) return;
-  const registry=window.__TF_REGISTRY__ || {};
-  const state=tfStateById("state_"+tfNum(layer.id));
-  if(!state) return;
-  Array.prototype.slice.call(layer.querySelectorAll("[data-tf-card-update]")).forEach(function(el){
-    if(el.parentNode) el.parentNode.removeChild(el);
-  });
-  ((state.inheritance&&state.inheritance.update)||[]).forEach(function(patch){
-    const anchor=patch&&(patch.id||patch.name);
-    const entry=anchor&&registry[anchor];
-    if(!entry) return;
-    const sel=String(anchor).replace(/"/g,'\\"');
-    // codegen produced a fresh implementation for this card in this section
-    if(layer.querySelector('[data-component-id="'+sel+'"]')) return;
-    // A page layer may still emit a plain keep placeholder for an anchor that is
-    // ALSO an update target (it would draw the card at its OLD position). Drop
-    // those so only the moved (override) clone remains and nothing duplicates.
-    Array.prototype.slice.call(layer.querySelectorAll('[data-keep-anchor="'+sel+'"]')).forEach(function(dup){
-      if(!dup.hasAttribute("data-tf-card-update") && dup.parentNode) dup.parentNode.removeChild(dup);
+  // Region keep clones still hold the ORIGINAL pixels of updated cards. Once the
+  // newest version of each updated card is mounted (its own slot / codegen / kept
+  // slot), blank the stale original inside every OTHER clone so old content never
+  // shows through. Folded in from the former standalone tfPunchUpdatedCards.
+  const updated=tfUpdatedOriginalAnchors(stateNumber);
+  if(updated.size){
+    updated.forEach(function(anchor){
+      const sel=String(anchor).replace(/"/g,'\\"');
+      const fresh=layer.querySelector('[data-component-id="'+sel+'"],[data-keep-anchor="'+sel+'"]');
+      if(!fresh) return;
+      const entry=registry[anchor];
+      if(!entry) return;
+      layer.querySelectorAll("[data-keep-anchor]").forEach(function(other){
+        if(other.getAttribute("data-keep-anchor")===anchor) return;
+        let nodes=[];
+        if(entry.selector){ try{ nodes=Array.prototype.slice.call(other.querySelectorAll(entry.selector)); }catch(e){} }
+        if(!nodes.length&&entry.id){ try{ nodes=Array.prototype.slice.call(other.querySelectorAll("#"+tfCssEscape(entry.id))); }catch(e){} }
+        nodes.forEach(function(node){ node.style.visibility="hidden"; });
+      });
     });
-    const slot=document.createElement("div");
-    slot.className="tf-keep-placeholder";
-    slot.setAttribute("data-keep-anchor", anchor);
-    slot.setAttribute("data-tf-card-update", "1");
-    slot.setAttribute("data-component-id", anchor);
-    const bbox=Array.isArray(patch.bbox)&&patch.bbox.length===4?patch.bbox.map(Number):null;
-    if(bbox&&bbox.every(function(n){ return Number.isFinite(n); })) slot.setAttribute("data-keep-override", bbox.join(","));
-    layer.appendChild(slot);
-  });
+  }
 }
 // Original anchors updated anywhere along this state's parent chain: their id
 // now refers to the newest implementation, never the original pixels.
@@ -1658,9 +1966,88 @@ function tfLatestUpdatePatchFor(stateNumber, anchor){
   }
   return null;
 }
+function tfSelfBboxFromPatch(patch, anchor){
+  if(!patch||typeof patch!=="object") return null;
+  const mods=(Array.isArray(patch.modifications_applied)&&patch.modifications_applied.length
+    ? patch.modifications_applied : patch.modifications)||[];
+  for(const mod of mods){
+    if(!mod||!Array.isArray(mod.set_bbox)||mod.set_bbox.length!==4) continue;
+    const t=String(mod.target||"");
+    const isSelfTarget=(!t||t==="self"||t==="bbox"||t===anchor||t==="children."+anchor);
+    if(!isSelfTarget) continue;
+    const bbox=mod.set_bbox.map(Number);
+    if(bbox.length===4&&bbox.every(function(n){ return Number.isFinite(n); })) return bbox;
+  }
+  if(Array.isArray(patch.bbox)&&patch.bbox.length===4){
+    const bbox=patch.bbox.map(Number);
+    if(bbox.every(function(n){ return Number.isFinite(n); })) return bbox;
+  }
+  return null;
+}
+// Single source of truth for a kept original-DOM card's geometry in THIS state:
+// the newest self set_bbox along the ancestor update chain (cumulative ledger),
+// else the registry's original bbox. This replaces the old data-keep-override
+// DOM round-trip — fill/z-index read this directly instead of an attribute that
+// some other pass had to stamp first.
+function tfLatestKeepBbox(anchor, stateNumber){
+  const patch=tfLatestUpdatePatchFor(stateNumber, anchor);
+  const fromLedger=patch?tfSelfBboxFromPatch(patch, anchor):null;
+  if(fromLedger) return fromLedger;
+  const registry=window.__TF_REGISTRY__||{};
+  const entry=registry[anchor];
+  if(entry&&Array.isArray(entry.bbox)&&entry.bbox.length===4){
+    const b=entry.bbox.map(Number);
+    if(b.every(function(n){ return Number.isFinite(n); })) return b;
+  }
+  return null;
+}
+// One runtime pass that guarantees every updated original-DOM card has a keep
+// slot to render into for this state. It folds together three former patches:
+//   * tfMountUpdatedOriginalCards — build a slot for THIS state's update patches;
+//   * autoKeepUpdatedCards (state-model build time) — pull ancestor-updated cards
+//     whose region is still kept, so a keep-only state shows the newest card;
+//   * tfApplyKeepLedgerOverrides — newest bbox (now resolved lazily in fill via
+//     tfLatestKeepBbox, so no data-keep-override attribute is written).
+// Geometry is left to tfFillKeepPlaceholders/tfKeepZIndexMap → tfLatestKeepBbox.
+function tfEnsureUpdatedKeepSlots(layer){
+  if(!layer) return;
+  const stateNumber=tfNum(layer.id);
+  const updated=tfUpdatedOriginalAnchors(stateNumber);
+  if(!updated.size) return;
+  const state=tfStateById("state_"+stateNumber);
+  const declaredHere=new Set();
+  ((state&&state.inheritance&&state.inheritance.update)||[]).forEach(function(patch){
+    const id=patch&&(patch.id||patch.name);
+    if(id) declaredHere.add(id);
+  });
+  // Newest geometry of the slots already present, to test region containment for
+  // ancestor-updated cards this state did not restate.
+  const keepBoxes=[];
+  layer.querySelectorAll("[data-keep-anchor]").forEach(function(slot){
+    const box=tfLatestKeepBbox(slot.getAttribute("data-keep-anchor"), stateNumber);
+    if(box) keepBoxes.push(box);
+  });
+  updated.forEach(function(anchor){
+    const sel=String(anchor).replace(/"/g,'\\"');
+    if(layer.querySelector('[data-component-id="'+sel+'"]')) return; // codegen version wins
+    if(layer.querySelector('[data-keep-anchor="'+sel+'"]')) return; // slot already exists
+    const box=tfLatestKeepBbox(anchor, stateNumber);
+    if(!box) return;
+    // An ancestor-updated card this state did not restate is only mounted when
+    // its region is actually kept (its box sits inside a kept slot's box).
+    if(!declaredHere.has(anchor) && !keepBoxes.some(function(kb){ return tfBoxContains(kb, box); })) return;
+    const slot=document.createElement("div");
+    slot.className="tf-keep-placeholder";
+    slot.setAttribute("data-keep-anchor", anchor);
+    slot.setAttribute("data-component-id", anchor);
+    layer.appendChild(slot);
+  });
+}
 // Apply a card's modification ledger inside its clone slot. Each state's patch
-// carries modifications_applied (every change since the original), so one
-// application makes the slot the newest card — no ancestor replay.
+// carries the cumulative modifications list (every change since the original),
+// so one application makes the slot the newest card — no ancestor replay.
+// Supports set_text / set_text_style / set_props / set_bbox and a delete type
+// (removes the targeted sub-node from the clone).
 function tfApplyCardLedgers(layer){
   if(!layer) return;
   const registry=window.__TF_REGISTRY__ || {};
@@ -1672,83 +2059,137 @@ function tfApplyCardLedgers(layer){
     if(!updated.has(anchor)) return;
     const patch=tfLatestUpdatePatchFor(stateNumber, anchor);
     if(!patch) return;
+    // Resolve the DOM node(s) inside this clone slot that a modification targets.
+    // Targets may be: the anchor itself, a registry id, a "children.<id>" path,
+    // or a raw original-DOM id. We try, in order: registry selector/id for the
+    // raw target, then for the children-stripped id, then a direct "#id" lookup
+    // inside the slot (original DOM children keep their id), then a
+    // [data-component-id] / [data-tf-id] match. This is what lets a child
+    // text/icon modification (e.g. "children.11_285136") actually hit its node.
+    // Owner child id encoded by a canonical modification target. "children.<id>"
+    // and "children.<id>.props.x" both own <id>; for nested paths the DEEPEST
+    // "children.<id>" segment wins. A bare container field ("props.x"/"text"/
+    // "bbox") owns nothing (null → the card root, handled by the caller).
+    function ownerIdOf(target){
+      const toks=String(target==null?"":target).split(".");
+      let owner=null;
+      for(var i=0;i<toks.length;i++){
+        var tok=toks[i];
+        if(tok==="children"&&i+1<toks.length){ owner=toks[i+1]; i++; continue; }
+        if(/^(props|text|text_style|bbox|layout|self)$/i.test(tok)) break;
+        owner=tok; // legacy bare id (no "children." prefix)
+      }
+      return owner;
+    }
     function nodesFor(target){
-      const entry=registry[target];
-      let nodes=[];
-      if(entry&&entry.selector){ try{ nodes=Array.prototype.slice.call(slot.querySelectorAll(entry.selector)); }catch(e){} }
-      if(!nodes.length&&entry&&entry.id){ try{ nodes=Array.prototype.slice.call(slot.querySelectorAll("#"+tfCssEscape(entry.id))); }catch(e){} }
-      return nodes;
+      const owner=ownerIdOf(target);
+      if(!owner) return [];
+      const seen=new Set();
+      const out=[];
+      const push=function(list){ for(const n of list){ if(n&&!seen.has(n)){ seen.add(n); out.push(n); } } };
+      const tryQuery=function(selector){
+        if(!selector) return;
+        try{ push(Array.prototype.slice.call(slot.querySelectorAll(selector))); }catch(e){}
+      };
+      const entry=registry[owner];
+      if(entry&&entry.selector) tryQuery(entry.selector);
+      if(entry&&entry.id) tryQuery("#"+tfCssEscape(entry.id));
+      tryQuery("#"+tfCssEscape(owner));
+      tryQuery('[data-component-id="'+owner.replace(/"/g,'\\"')+'"]');
+      tryQuery('[data-tf-id="'+owner.replace(/"/g,'\\"')+'"]');
+      return out;
+    }
+    const STYLE_KEYS={color:1,background:1,"background-color":1,backgroundColor:1,
+      "font-size":1,fontSize:1,"font-weight":1,fontWeight:1,"font-style":1,fontStyle:1,
+      "text-align":1,textAlign:1,"text-decoration":1,textDecoration:1,opacity:1,
+      "border-color":1,borderColor:1,"border-radius":1,borderRadius:1,border:1,
+      width:1,height:1,display:1,visibility:1,fill:1,stroke:1};
+    const ATTR_KEYS={src:1,href:1,placeholder:1,alt:1,title:1,checked:1,selected:1,disabled:1};
+    function applyProps(node, props){
+      if(!props||typeof props!=="object") return;
+      Object.keys(props).forEach(function(key){
+        const val=props[key];
+        if(val==null) return;
+        const tag=(node.tagName||"").toLowerCase();
+        if(key==="value"){
+          if(tag==="input"||tag==="textarea"||tag==="select"){ node.value=val; node.setAttribute("value", val); }
+          else node.textContent=val;
+          return;
+        }
+        if(STYLE_KEYS[key]){ try{ node.style[key.replace(/-([a-z])/g,function(_,c){return c.toUpperCase();})]=val; }catch(e){} return; }
+        if(ATTR_KEYS[key]){ try{ node.setAttribute(key, val); }catch(e){} return; }
+        // data-*/aria-* are real attributes; set them as such. Any other unknown
+        // key is ignored (previously it was dumped as an inline style, which
+        // silently mis-applied business/semantic props as CSS).
+        if(/^(data|aria)-/.test(key)){ try{ node.setAttribute(key, val); }catch(e){} }
+      });
     }
     const mods=(Array.isArray(patch.modifications_applied)&&patch.modifications_applied.length
       ? patch.modifications_applied : patch.modifications)||[];
     mods.forEach(function(mod){
       if(!mod||typeof mod!=="object") return;
+      const owner=ownerIdOf(mod.target);
+      // A self/anchor target refers to the card root itself, realised by the SLOT
+      // (tfFillKeepPlaceholders via tfLatestKeepBbox), so a self bbox is never
+      // applied to the clone here (that would double-shift content).
+      const isSelfTarget=(!owner||owner===anchor);
+      if(String(mod.type||"")==="delete"){
+        // Remove the deleted child node(s) from this clone. A self-target delete
+        // would drop the card root (state-impl forbids deleting the top-level
+        // parent), so skip it. For codegen cards the regenerated source already
+        // omits the child, making this a harmless no-op.
+        if(isSelfTarget) return;
+        nodesFor(mod.target).forEach(function(node){ if(node&&node.parentNode) node.parentNode.removeChild(node); });
+        return;
+      }
       const hasText=typeof mod.set_text==="string";
       const style=mod.set_text_style&&typeof mod.set_text_style==="object"?mod.set_text_style:null;
-      if(!hasText&&!style) return;
+      const props=mod.set_props&&typeof mod.set_props==="object"?mod.set_props:null;
+      const bbox=Array.isArray(mod.set_bbox)&&mod.set_bbox.length===4?mod.set_bbox.map(Number):null;
+      if(!hasText&&!style&&!props&&!bbox) return;
       let nodes=nodesFor(mod.target);
-      if(!nodes.length&&(mod.target==="text"||mod.target==="text_style"||mod.target==="self")) nodes=nodesFor(anchor);
+      if(!nodes.length&&isSelfTarget) nodes=nodesFor(anchor);
       nodes.forEach(function(node){
         if(hasText) node.textContent=mod.set_text;
-        if(style){
-          if(style.color) node.style.color=style.color;
-          if(style.fontSize) node.style.fontSize=style.fontSize;
-          if(style.fontWeight) node.style.fontWeight=style.fontWeight;
+        if(style) applyProps(node, style);
+        if(props) applyProps(node, props);
+        if(bbox&&!isSelfTarget){
+          node.style.position=node.style.position||"absolute";
+          node.style.left=bbox[0]+"px"; node.style.top=bbox[1]+"px";
+          node.style.width=bbox[2]+"px"; node.style.height=bbox[3]+"px";
         }
       });
     });
-    // legacy models: top-level text/text_style on the patch rewrite the anchor
-    if(typeof patch.text==="string"&&patch.text.trim()){
-      nodesFor(anchor).forEach(function(node){ node.textContent=patch.text; });
-    }
-    if(patch.text_style&&typeof patch.text_style==="object"){
-      nodesFor(anchor).forEach(function(node){
-        if(patch.text_style.color) node.style.color=patch.text_style.color;
-        if(patch.text_style.fontSize) node.style.fontSize=patch.text_style.fontSize;
-        if(patch.text_style.fontWeight) node.style.fontWeight=patch.text_style.fontWeight;
-      });
-    }
   });
 }
-// Region keep clones still hold the ORIGINAL pixels of updated cards. When the
-// layer renders a newer version of a card (its own slot, a codegen mount, or a
-// kept card slot), blank the stale original inside every other clone so old
-// content never shows through.
-function tfPunchUpdatedCards(layer){
-  if(!layer) return;
-  const registry=window.__TF_REGISTRY__ || {};
-  const updated=tfUpdatedOriginalAnchors(tfNum(layer.id));
-  if(!updated.size) return;
-  updated.forEach(function(anchor){
-    const fresh=layer.querySelector('[data-component-id="'+String(anchor).replace(/"/g,'\\"')+'"],[data-keep-anchor="'+String(anchor).replace(/"/g,'\\"')+'"]');
-    if(!fresh) return;
-    const entry=registry[anchor];
-    if(!entry) return;
-    layer.querySelectorAll("[data-keep-anchor]").forEach(function(slot){
-      if(slot.getAttribute("data-keep-anchor")===anchor) return;
-      let nodes=[];
-      if(entry.selector){ try{ nodes=Array.prototype.slice.call(slot.querySelectorAll(entry.selector)); }catch(e){} }
-      if(!nodes.length&&entry.id){ try{ nodes=Array.prototype.slice.call(slot.querySelectorAll("#"+tfCssEscape(entry.id))); }catch(e){} }
-      nodes.forEach(function(node){ node.style.visibility="hidden"; });
-    });
-  });
-}
-function tfIsAutoTrigger(action){
-  return /data_loaded|load_complete|submit_success|timeout|system|auto|success|完成|系统|自动/i.test(String(action||""));
+// Auto-transition delay (ms). Read from the trigger (delay_ms/delay/ms) first,
+// then a model-level default (auto_transition_delay_ms), else 600. Replaces the
+// previously hardcoded 600 literal so timing is data-driven, not baked in.
+var TF_DEFAULT_AUTO_DELAY_MS=600;
+function tfAutoDelayMs(source){
+  const model=window.__TF_STATE_MODEL__ || {};
+  const candidates=[source&&source.delay_ms, source&&source.delay, source&&source.ms, model.auto_transition_delay_ms];
+  for(const c of candidates){
+    const n=Number(c);
+    if(Number.isFinite(n)&&n>=0) return n;
+  }
+  return TF_DEFAULT_AUTO_DELAY_MS;
 }
 function tfScheduleAutoTransition(currentState){
   const model=window.__TF_STATE_MODEL__ || {};
-  const next=(model.states||[]).find(function(state){
-    const trigger=state && state.trigger || {};
-    return tfNum(state.parent_state)===currentState && tfIsAutoTrigger(trigger.action || trigger.event || trigger.anchor);
+  // Outbound model: look for a "wait" trigger on the CURRENT state itself.
+  const currentStateObj=(model.states||[]).find(function(s){ return tfNum(s.id)===currentState; });
+  const waitTrig=currentStateObj && (currentStateObj.triggers||[]).find(function(t){
+    return t && t.action==="wait";
   });
-  if(!next) return;
-  const target=tfGotoTarget(next.trigger && (next.trigger.goto || next.trigger.action)) || tfNum(next.id);
-  if(!target || target===currentState) return;
-  window.clearTimeout(window.TF && window.TF._autoTimer);
-  window.TF._autoTimer=window.setTimeout(function(){
-    if(window.TF && window.TF.current===currentState) window.TF.goto(target);
-  }, 600);
+  if(waitTrig){
+    const target=tfGotoTarget(waitTrig.goto);
+    if(!target || target===currentState) return;
+    window.clearTimeout(window.TF && window.TF._autoTimer);
+    window.TF._autoTimer=window.setTimeout(function(){
+      if(window.TF && window.TF.current===currentState) window.TF.goto(target);
+    }, tfAutoDelayMs(waitTrig));
+  }
 }
 function tfInstallGoto(){
   window.TF={current:1,goto:function(id){
@@ -1767,31 +2208,26 @@ function tfInstallGoto(){
     const layer=document.getElementById("tf-state-"+n);
     if(layer){
       if(appRoot) appRoot.style.display="";
-      tfMountUpdatedOriginalCards(layer);
+      // Ensure every updated original-DOM card has a slot (folds in the old
+      // mount/auto-keep/override passes), then fill keeps (geometry + stale-clone
+      // hiding) and replay each card's modification ledger.
+      tfEnsureUpdatedKeepSlots(layer);
+      // Show the layer BEFORE filling keeps: tfFillKeepPlaceholders measures the
+      // pruned clone live to align each anchor to its slot, which needs the slot
+      // to be laid out (a display:none layer measures as 0).
+      layer.style.display="block";
       tfFillKeepPlaceholders(layer);
       tfApplyCardLedgers(layer);
-      tfPunchUpdatedCards(layer);
-      layer.style.display="block";
       if(appRoot) appRoot.style.display="none";
     }
     tfScheduleAutoTransition(n);
   }};
 }
 tfInstallGoto();
-function tfActionIsClick(action){
-  return /(^|:)click$/i.test(String(action||"")) || /^tap$/i.test(String(action||""))
-    || /long[\s_-]?press|长按/i.test(String(action||""));
-}
-function tfActionIsInput(action){
-  return /^(input|focus|change|typing|type)$/i.test(String(action||""));
-}
 function tfGotoTarget(value){
   if(!value) return null;
   const match=String(value).match(/state[_-]?(\\d+)/i);
   return match?Number(match[1]):null;
-}
-function tfActionIsBindable(action){
-  return tfActionIsClick(action) || tfActionIsInput(action) || !!tfGotoTarget(action);
 }
 function tfFindByDataAttr(root, attr, value){
   if(!root || !attr) return null;
@@ -1820,56 +2256,50 @@ function tfFindAnchorElements(anchor, stateNumber){
   const escaped=tfCssEscape(raw);
   const registry=window.__TF_REGISTRY__ || {};
   const entry=registry[raw];
-  if(entry && entry.selector){
-    try{ add(document.querySelector(entry.selector)); }catch(e){}
-  }
-  if(entry && entry.id){
-    try{ add(document.getElementById(entry.id)); }catch(e){}
-  }
   const layer=stateNumber>1 ? document.getElementById("tf-state-"+stateNumber) : document.getElementById("app-root");
-  const roots=[layer, document];
-  roots.forEach(function(root){
-    if(!root) return;
-    try{ add(root.querySelector("#"+escaped)); }catch(e){}
-    try{ tfFindAllByDataAttr(root, "data-component-id", raw).forEach(add); }catch(e){}
-    try{ tfFindAllByDataAttr(root, "data-component-frame", raw).forEach(add); }catch(e){}
-    try{ tfFindAllByDataAttr(root, "data-keep-anchor", raw).forEach(add); }catch(e){}
-  });
+  // Prefer matches WITHIN the source state's own layer. A component that also
+  // exists in other state sections (e.g. a BottomSheet created in one state and
+  // updated in the next) must only receive THIS state's binding; searching the
+  // whole document would bind every section's copy and let the last-installed
+  // goto hijack earlier states (e.g. state_2 "下一步" jumping to state_4).
+  if(layer){
+    try{ add(layer.querySelector("#"+escaped)); }catch(e){}
+    try{ tfFindAllByDataAttr(layer, "data-component-id", raw).forEach(add); }catch(e){}
+    try{ tfFindAllByDataAttr(layer, "data-component-frame", raw).forEach(add); }catch(e){}
+    try{ tfFindAllByDataAttr(layer, "data-keep-anchor", raw).forEach(add); }catch(e){}
+  }
+  if(out.length) return out;
+  // Fallback only when the layer holds no match: registry selector / global
+  // document (covers app-root anchors and anchors not present inside the layer).
+  if(entry && entry.selector){ try{ add(document.querySelector(entry.selector)); }catch(e){} }
+  if(entry && entry.id){ try{ add(document.getElementById(entry.id)); }catch(e){} }
+  try{ add(document.querySelector("#"+escaped)); }catch(e){}
+  try{ tfFindAllByDataAttr(document, "data-component-id", raw).forEach(add); }catch(e){}
+  try{ tfFindAllByDataAttr(document, "data-component-frame", raw).forEach(add); }catch(e){}
+  try{ tfFindAllByDataAttr(document, "data-keep-anchor", raw).forEach(add); }catch(e){}
   return out;
 }
+// Simplest "id + rule" target resolution:
+//  - if target names a concrete child component / element id, bind that element;
+//  - otherwise a couple of keyword rules pick primary/secondary button;
+//  - otherwise bind the anchor element itself.
 function tfPickTargetElements(root, target){
-  if(!root || !target) return root ? [root] : [];
-  const raw=String(target);
-  const text=raw.toLowerCase();
-  // Resolve the target as a concrete child component / element id first (e.g.
-  // "sheet_footer", "name_input"). The state-model commonly expresses a trigger
-  // target as a child component id rather than a semantic keyword, so binding
-  // must land on that element's action control instead of falling through to the
-  // first button in the anchor (which is often an unrelated icon button).
-  let scoped=null;
-  try{ scoped=root.querySelector('[data-component-id="'+tfCssEscape(raw)+'"]'); }catch(e){}
-  if(!scoped){ try{ scoped=root.querySelector('[data-component-frame="'+tfCssEscape(raw)+'"]'); }catch(e){} }
-  if(!scoped){ try{ scoped=root.querySelector('#'+tfCssEscape(raw)); }catch(e){} }
-  if(scoped){
-    const scopedControls=Array.prototype.slice.call(scoped.querySelectorAll("button,[role='button'],.tf-cg-confirm,input,textarea"));
-    if(scopedControls.length) return [scopedControls[scopedControls.length-1]];
-    return [scoped];
+  if(!root) return [];
+  const raw=target?String(target):"";
+  if(raw){
+    let el=null;
+    try{ el=root.querySelector('[data-component-id="'+tfCssEscape(raw)+'"]'); }catch(e){}
+    if(!el){ try{ el=root.querySelector('[data-component-frame="'+tfCssEscape(raw)+'"]'); }catch(e){} }
+    if(!el){ try{ el=root.querySelector('#'+tfCssEscape(raw)); }catch(e){} }
+    if(el) return [el];
+    const text=raw.toLowerCase();
+    const buttons=Array.prototype.slice.call(root.querySelectorAll("button,[role='button'],.tf-cg-confirm"));
+    if(buttons.length){
+      if(/secondary|cancel|back|close|取消|返回|关闭/.test(text)) return [buttons[0]];
+      if(/primary|confirm|submit|主|保存|确认|确定/.test(text)) return [buttons[buttons.length-1]];
+    }
   }
-  const buttons=Array.prototype.slice.call(root.querySelectorAll("button,[role='button'],.tf-cg-confirm,input,textarea"));
-  if(/body\\.options|options?|option|chips?|pills?|segmented|filter/.test(text)){
-    const scope=root.querySelector(".tf-cg-sheet-body,.tf-cg-body,[data-component-id*='option'],[data-component-id*='pills'],[data-component-id*='filter']") || root;
-    const optionButtons=Array.prototype.slice.call(scope.querySelectorAll(".tf-cg-option,[role='option'],button,[role='button']"))
-      .filter(function(el){
-        const label=(el.textContent || "").trim();
-        return label && !/确认|确定|保存|取消|关闭|返回|重置|清空|搜索|查询/.test(label);
-      });
-    return optionButtons.length ? optionButtons : buttons;
-  }
-  if(!buttons.length) return [root];
-  if(/primary|confirm|submit|footer\\.primary|主/.test(text)) return [buttons[buttons.length-1] || root];
-  if(/secondary|cancel|back|close|footer\\.secondary|取消|返回|关闭/.test(text)) return [buttons[0] || root];
-  if(/input|body\\.input|field/.test(text)) return [buttons.find(function(el){return /input|textarea/i.test(el.tagName);}) || root];
-  return [buttons[0] || root];
+  return [root];
 }
 function tfPickTargetElement(root, target){
   return tfPickTargetElements(root, target)[0] || root;
@@ -1920,41 +2350,21 @@ function tfBindGoto(el, targetState){
       });
     }
     roots.forEach(function(root){
-      const picked=tfPickTargetElements(root, target);
-      picked.forEach(function(el){
+      tfPickTargetElements(root, target).forEach(function(el){
         tfBindGoto(el, targetState);
       });
-      const targetText=String(target || "").toLowerCase();
-      const componentId=(root && (root.getAttribute("data-component-id") || root.getAttribute("data-component-frame"))) || "";
-      const shouldBindWrapper=picked.length===1
-        && root
-        && picked[0] !== root
-        && componentId
-        && !/sheet|overlay|modal|dialog/.test(componentId)
-        && /button|primary|secondary|confirm|submit|save|footer|input|field|按钮|保存|确认|确定/.test(targetText);
-      if(shouldBindWrapper) tfBindGoto(root, targetState);
     });
   }
   (model.states||[]).forEach(function(state){
     const targetState=tfNum(state.id);
-    const trigger=state.trigger || null;
-    if(trigger && trigger.anchor && tfActionIsBindable(trigger.action)){
-      const sourceState=state.parent_state || "state_1";
-      const triggerTarget=tfGotoTarget(trigger.action) || targetState;
-      if(triggerTarget!==tfNum(sourceState)){
-        bindAnchorGoto(trigger.anchor, trigger.target, sourceState, triggerTarget);
-        // Save/submit transitions are often expressed only as the target
-        // state's trigger (no bind patch); the soft keyboard's return key in
-        // the source state must follow the same goto.
-        tfBindKeyboardReturnGoto(tfNum(sourceState), trigger, triggerTarget);
-      }
-    }
-    (state.patches||[]).forEach(function(patch){
-      if(patch.type!=="bind") return;
-      const patchTarget=tfGotoTarget(patch.goto || patch.action);
-      if(!patchTarget || !tfActionIsBindable(patch.action || "click")) return;
-      bindAnchorGoto(patch.anchor || patch.target_anchor || patch.target, patch.target, state.id, patchTarget);
-      tfBindKeyboardReturnGoto(targetState, patch, patchTarget);
+    // New outbound triggers model: each trigger is {action, anchor?, goto, target?}
+    // living on the SOURCE state, pointing forward to goto.
+    (state.triggers||[]).forEach(function(trig){
+      if(!trig || trig.action==="wait") return; // "wait" handled by tfScheduleAutoTransition
+      const gotoTarget=tfGotoTarget(trig.goto);
+      if(!gotoTarget) return;
+      bindAnchorGoto(trig.anchor, trig.target, state.id, gotoTarget);
+      tfBindKeyboardReturnGoto(targetState, trig, gotoTarget);
     });
     const parentState=tfGotoTarget(state.parent_state);
     if(!parentState) return;
@@ -2057,6 +2467,7 @@ async function measureContentAutoFit(htmlPath, stateModel, componentCodegen, reg
         if (!validBboxArray(bbox)) continue;
         if (isViewportFixedSpec(spec)) continue; // bottom bars / sheets / overlays keep authored size
         if (isMediaSpec(spec)) continue; // media keeps its intentional aspect height
+        if (updateSetsExplicitBackground(state, registry, id)) continue; // explicit opaque background fill → authored bbox height is the intended display
         candidates.push({ id, declared: bbox[3] });
       }
       if (!candidates.length) continue;
@@ -2099,19 +2510,39 @@ async function measureContentAutoFit(htmlPath, stateModel, componentCodegen, reg
 }
 
 async function main() {
+  loadSkillEnv();
+  configureNodePath();
   const args = process.argv.slice(2);
-  const base = path.resolve(ROOT, args[0] || ".");
-  const modelName = argValue(args, "--model", "qwen3.7-max");
-  const htmlPath = path.resolve(ROOT, argValue(args, "--html", path.join(base, ".run_skill/latest/preprocess/Index.preprocessed.html")));
-  const registryPath = path.resolve(ROOT, argValue(args, "--registry", path.join(base, ".run_skill/latest/preprocess/semantic_registry.json")));
-  const stateModelPath = path.resolve(ROOT, argValue(args, "--state-model", path.join(base, ".run_skill/latest/state_implementation/state_implementation_model.llm.json")));
-  const blueprintPath = path.resolve(ROOT, argValue(args, "--blueprint", ""));
-  const componentCodegenPath = path.resolve(ROOT, argValue(args, "--component-codegen", ""));
-  const outDir = path.resolve(ROOT, argValue(args, "--out-dir", path.join(base, ".run_skill", "llm_layer_codegen")));
-  const outHtml = path.resolve(ROOT, argValue(args, "--out-html", path.join(base, "html", "Index.state-model.llm-layers.html")));
+  const cwd = process.cwd();
+  const base = resolveArgPath(args[0] || ".", cwd);
+  const modelName = resolveTextModel(argValue(args, "--model", ""));
+  const htmlPath = resolveArgPath(
+    argValue(args, "--html", path.join(base, ".run_skill/latest/preprocess/Index.preprocessed.html")),
+    cwd,
+  );
+  const registryPath = resolveArgPath(
+    argValue(args, "--registry", path.join(base, ".run_skill/latest/preprocess/semantic_registry.json")),
+    cwd,
+  );
+  const stateModelPath = resolveArgPath(
+    argValue(args, "--state-model", path.join(base, ".run_skill/latest/state_implementation/state_implementation_model.llm.json")),
+    cwd,
+  );
+  const blueprintPath = resolveArgPath(argValue(args, "--blueprint", ""), cwd);
+  const componentCodegenPath = resolveArgPath(argValue(args, "--component-codegen", ""), cwd);
+  const outDir = resolveArgPath(
+    argValue(args, "--out-dir", path.join(base, ".run_skill", "llm_layer_codegen")),
+    cwd,
+  );
+  const outHtml = resolveArgPath(
+    argValue(args, "--out-html", path.join(base, "html", "Index.state-model.llm-layers.html")),
+    cwd,
+  );
   const width = Number(argValue(args, "--width", "360"));
   const height = Number(argValue(args, "--height", "792"));
-  const ruleOnly = args.includes("--rule-only");
+  if (Number.isFinite(width) && width > 0) TF_PAGE_WIDTH = width;
+  const ruleOnly = !args.includes("--llm"); // default: rule-only layer; pass --llm to use LLM-authored layer
+  const noAutoFit = !args.includes("--auto-fit"); // default: auto-fit OFF; pass --auto-fit to re-enable
   const maxTokens = Number(argValue(args, "--max-tokens", "12000"));
 
   const originalHtml = readUtf8(htmlPath);
@@ -2168,10 +2599,12 @@ async function main() {
   // their rendered height and reflow downstream flow groups. Media/aspect
   // components (carousel, banner, ...) keep their authored bbox height.
   let heightOverrides = new Map();
-  try {
-    heightOverrides = await measureContentAutoFit(outHtml, stateModel, componentCodegen, registry, width, height);
-  } catch (err) {
-    writeUtf8(path.join(outDir, "auto_fit.error.txt"), String(err.stack || err.message || err));
+  if (!noAutoFit) {
+    try {
+      heightOverrides = await measureContentAutoFit(outHtml, stateModel, componentCodegen, registry, width, height);
+    } catch (err) {
+      writeUtf8(path.join(outDir, "auto_fit.error.txt"), String(err.stack || err.message || err));
+    }
   }
   writeJson(path.join(outDir, "auto_fit.overrides.json"), { tolerance_px: HEIGHT_FIT_TOLERANCE, overrides: Object.fromEntries(heightOverrides) });
   if (heightOverrides.size) {

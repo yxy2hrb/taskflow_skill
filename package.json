@@ -1,0 +1,14 @@
+{
+  "name": "taskflow-llm-pagegen",
+  "private": true,
+  "description": "Runtime dependencies for taskflow-llm-pagegen skill (playwright, react SSR, esbuild).",
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "esbuild": "^0.25.0",
+    "playwright": "^1.51.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  }
+}

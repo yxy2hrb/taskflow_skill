@@ -2,8 +2,7 @@
 
 const fs = require("fs");
 const path = require("path");
-
-const ROOT = path.resolve(__dirname, "../../../..");
+const { resolveArgPath } = require("./paths");
 const START = "<!-- tf-state-key-nav:start -->";
 const END = "<!-- tf-state-key-nav:end -->";
 
@@ -16,7 +15,7 @@ function usage() {
 }
 
 function resolveInput(file) {
-  return path.resolve(ROOT, file);
+  return resolveArgPath(file);
 }
 
 function escapeRegExp(value) {
@@ -113,7 +112,7 @@ function main() {
   for (const arg of args) {
     const file = resolveInput(arg);
     injectFile(file);
-    console.log(`[inject-state-key-nav] updated ${path.relative(ROOT, file).replace(/\\/g, "/")}`);
+    console.log(`[inject-state-key-nav] updated ${file.replace(/\\/g, "/")}`);
   }
 }
 

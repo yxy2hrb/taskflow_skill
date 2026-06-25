@@ -1,0 +1,854 @@
+{
+  "div_bbox": [
+    {
+      "key": "auto:1",
+      "id": null,
+      "bbox": {
+        "x": 0,
+        "y": 0,
+        "w": 360,
+        "h": 792
+      },
+      "text_snippet": "08:08 我的 工作台 我的 服务 工作台 商城 首页 创建开局 创建项目集 接收项目 项目开局",
+      "total_child_count": 1,
+      "style_summary": {
+        "background": "rgba(0, 0, 0, 0)",
+        "boxShadow": "",
+        "opacity": "1"
+      }
+    },
+    {
+      "key": "id:0_1",
+      "id": "0_1",
+      "bbox": {
+        "x": 0,
+        "y": 0,
+        "w": 360,
+        "h": 792
+      },
+      "text_snippet": "08:08 我的 工作台 我的 服务 工作台 商城 首页 创建开局 创建项目集 接收项目 项目开局",
+      "total_child_count": 1,
+      "style_summary": {
+        "background": "rgba(0, 0, 0, 0)",
+        "boxShadow": "",
+        "opacity": "1"
+      }
+    },
+    {
+      "key": "id:14_807507",
+      "id": "14_807507",
+      "bbox": {
+        "x": 0,
+        "y": 0,
+        "w": 360,
+        "h": 792
+      },
+      "text_snippet": "08:08 我的 工作台 我的 服务 工作台 商城 首页 创建开局 创建项目集 接收项目 项目开局",
+      "total_child_count": 6,
+      "style_summary": {
+        "background": "rgb(243, 243, 243)",
+        "boxShadow": "",
+        "opacity": "1"
+      }
+    },
+    {
+      "key": "id:14_807508",
+      "id": "14_807508",
+      "bbox": {
+        "x": 0,
+        "y": 0,
+        "w": 360,
+        "h": 228
+      },
+      "text_snippet": "",
+      "total_child_count": 5,
+      "style_summary": {
+        "background": "rgba(0, 0, 0, 0)",
+        "boxShadow": "",
+        "opacity": "1"
+      }
+    },
+    {
+      "key": "id:14_807509",
+      "id": "14_807509",
+      "bbox": {
+        "x": -64,
+        "y": -86,
+        "w": 187,
+        "h": 181
+      },
+      "text_snippet": "",
+      "total_child_count": 0,
+      "style_summary": {
+        "background": "rgba(0, 0, 0, 0)",
+        "boxShadow": "",
+        "opacity": "1"
+      }
+    },
+    {
+      "key": "id:14_807510",
+      "id": "14_807510",
+      "bbox": {
+        "x": 38,
+        "y": -49,
+        "w": 146,
+        "h": 144
+      },
+      "text_snippet": "",
+      "total_child_count": 0,
+      "style_summary": {
+        "background": "rgba(0, 0, 0, 0)",
+        "boxShadow": "",
+        "opacity": "1"
+      }
+    },
+    {
+      "key": "id:14_807511",
+      "id": "14_807511",
+      "bbox": {
+        "x": -61,
+        "y": 0,
+        "w": 107,
+        "h": 105
+      },
+      "text_snippet": "",
+      "total_child_count": 0,
+      "style_summary": {
+        "background": "rgba(0, 0, 0, 0)",
+        "boxShadow": "",
+        "opacity": "1"
+      }
+    },
+    {
+      "key": "id:14_807512",
+      "id": "14_807512",
+      "bbox": {
+        "x": 165,
+        "y": -51,
+        "w": 201,
+        "h": 166
+      },
+      "text_snippet": "",
+      "total_child_count": 0,
+      "style_summary": {
+        "background": "rgba(0, 0, 0, 0)",
+        "boxShadow": "",
+        "opacity": "1"
+      }
+    },
+    {
+      "key": "id:14_807513",
+      "id": "14_807513",
+      "bbox": {
+        "x": 0,
+        "y": 0,
+        "w": 360,
+        "h": 200
+      },
+      "text_snippet": "",
+      "total_child_count": 0,
+      "style_summary": {
+        "background": "rgba(245, 245, 245, 0.8)",
+        "boxShadow": "",
+        "opacity": "1"
+      }
+    },
+    {
+      "key": "id:14_807521",
+      "id": "14_807521",
+      "bbox": {
+        "x": 0,
+        "y": 0,
+        "w": 360,
+        "h": 24
+      },
+      "text_snippet": "",
+      "total_child_count": 0,
+      "style_summary": {
+        "background": "rgba(0, 0, 0, 0)",
+        "boxShadow": "",
+        "opacity": "1"
+      }
+    },
+    {
+      "key": "id:14_807522",
+      "id": "14_807522",
+      "bbox": {
+        "x": 0,
+        "y": 0,
+        "w": 360,
+        "h": 92
+      },
+      "text_snippet": "08:08 我的 工作台",
+      "total_child_count": 1,
+      "style_summary": {
+        "background": "rgba(0, 0, 0, 0)",
+        "boxShadow": "",
+        "opacity": "1"
+      }
+    },
+    {
+      "key": "id:14_807523",
+      "id": "14_807523",
+      "bbox": {
+        "x": 0,
+        "y": 0,
+        "w": 360,
+        "h": 92
+      },
+      "text_snippet": "08:08 我的 工作台",
+      "total_child_count": 1,
+      "style_summary": {
+        "background": "rgba(0, 0, 0, 0)",
+        "boxShadow": "",
+        "opacity": "1"
+      }
+    },
+    {
+      "key": "auto:2",
+      "id": null,
+      "bbox": {
+        "x": 0,
+        "y": 0,
+        "w": 360,
+        "h": 92
+      },
+      "text_snippet": "08:08 我的 工作台",
+      "total_child_count": 2,
+      "style_summary": {
+        "background": "rgba(0, 0, 0, 0)",
+        "boxShadow": "",
+        "opacity": "1"
+      }
+    },
+    {
+      "key": "id:146_169682",
+      "id": "146_169682",
+      "bbox": {
+        "x": 0,
+        "y": 0,
+        "w": 360,
+        "h": 36
+      },
+      "text_snippet": "08:08",
+      "total_child_count": 1,
+      "style_summary": {
+        "background": "rgba(0, 0, 0, 0)",
+        "boxShadow": "",
+        "opacity": "1"
+      }
+    },
+    {
+      "key": "id:146_169683",
+      "id": "146_169683",
+      "bbox": {
+        "x": 0,
+        "y": 0,
+        "w": 360,
+        "h": 36
+      },
+      "text_snippet": "08:08",
+      "total_child_count": 1,
+      "style_summary": {
+        "background": "rgba(0, 0, 0, 0)",
+        "boxShadow": "",
+        "opacity": "1"
+      }
+    },
+    {
+      "key": "id:146_169742",
+      "id": "146_169742",
+      "bbox": {
+        "x": 0,
+        "y": 36,
+        "w": 360,
+        "h": 56
+      },
+      "text_snippet": "我的 工作台",
+      "total_child_count": 1,
+      "style_summary": {
+        "background": "rgba(0, 0, 0, 0)",
+        "boxShadow": "",
+        "opacity": "1"
+      }
+    },
+    {
+      "key": "auto:4",
+      "id": null,
+      "bbox": {
+        "x": 0,
+        "y": 36,
+        "w": 360,
+        "h": 56
+      },
+      "text_snippet": "我的 工作台",
+      "total_child_count": 1,
+      "style_summary": {
+        "background": "rgba(0, 0, 0, 0)",
+        "boxShadow": "",
+        "opacity": "1"
+      }
+    },
+    {
+      "key": "id:14_807524",
+      "id": "14_807524",
+      "bbox": {
+        "x": 0,
+        "y": 728,
+        "w": 360,
+        "h": 64
+      },
+      "text_snippet": "我的 服务 工作台 商城 首页",
+      "total_child_count": 11,
+      "style_summary": {
+        "background": "rgba(0, 0, 0, 0)",
+        "boxShadow": "",
+        "opacity": "1"
+      }
+    },
+    {
+      "key": "id:14_807525",
+      "id": "14_807525",
+      "bbox": {
+        "x": 0,
+        "y": 728,
+        "w": 360,
+        "h": 64
+      },
+      "text_snippet": "",
+      "total_child_count": 0,
+      "style_summary": {
+        "background": "rgb(255, 255, 255)",
+        "boxShadow": "",
+        "opacity": "1"
+      }
+    },
+    {
+      "key": "id:14_807531",
+      "id": "14_807531",
+      "bbox": {
+        "x": 93,
+        "y": 738,
+        "w": 30,
+        "h": 30
+      },
+      "text_snippet": "",
+      "total_child_count": 2,
+      "style_summary": {
+        "background": "rgba(0, 0, 0, 0)",
+        "boxShadow": "",
+        "opacity": "1"
+      }
+    },
+    {
+      "key": "id:14_807532",
+      "id": "14_807532",
+      "bbox": {
+        "x": 93,
+        "y": 738,
+        "w": 30,
+        "h": 30
+      },
+      "text_snippet": "",
+      "total_child_count": 0,
+      "style_summary": {
+        "background": "rgba(0, 0, 0, 0)",
+        "boxShadow": "",
+        "opacity": "1"
+      }
+    },
+    {
+      "key": "id:14_807533",
+      "id": "14_807533",
+      "bbox": {
+        "x": 99,
+        "y": 745,
+        "w": 18,
+        "h": 17
+      },
+      "text_snippet": "",
+      "total_child_count": 2,
+      "style_summary": {
+        "background": "rgba(0, 0, 0, 0)",
+        "boxShadow": "",
+        "opacity": "1"
+      }
+    },
+    {
+      "key": "id:14_807534",
+      "id": "14_807534",
+      "bbox": {
+        "x": 104,
+        "y": 748,
+        "w": 7,
+        "h": 4
+      },
+      "text_snippet": "",
+      "total_child_count": 0,
+      "style_summary": {
+        "background": "rgba(0, 0, 0, 0)",
+        "boxShadow": "",
+        "opacity": "1"
+      }
+    },
+    {
+      "key": "id:14_807535",
+      "id": "14_807535",
+      "bbox": {
+        "x": 99,
+        "y": 745,
+        "w": 18,
+        "h": 17
+      },
+      "text_snippet": "",
+      "total_child_count": 2,
+      "style_summary": {
+        "background": "rgba(0, 0, 0, 0)",
+        "boxShadow": "",
+        "opacity": "1"
+      }
+    },
+    {
+      "key": "auto:7",
+      "id": null,
+      "bbox": {
+        "x": 99,
+        "y": 745,
+        "w": 18,
+        "h": 17
+      },
+      "text_snippet": "",
+      "total_child_count": 0,
+      "style_summary": {
+        "background": "rgba(0, 0, 0, 0)",
+        "boxShadow": "",
+        "opacity": "1"
+      }
+    },
+    {
+      "key": "auto:8",
+      "id": null,
+      "bbox": {
+        "x": 98,
+        "y": 744,
+        "w": 20,
+        "h": 19
+      },
+      "text_snippet": "",
+      "total_child_count": 0,
+      "style_summary": {
+        "background": "rgba(0, 0, 0, 0)",
+        "boxShadow": "",
+        "opacity": "1"
+      }
+    },
+    {
+      "key": "id:14_807536",
+      "id": "14_807536",
+      "bbox": {
+        "x": 21,
+        "y": 738,
+        "w": 30,
+        "h": 30
+      },
+      "text_snippet": "",
+      "total_child_count": 0,
+      "style_summary": {
+        "background": "rgba(0, 0, 0, 0)",
+        "boxShadow": "",
+        "opacity": "1"
+      }
+    },
+    {
+      "key": "id:14_807540",
+      "id": "14_807540",
+      "bbox": {
+        "x": 165,
+        "y": 738,
+        "w": 30,
+        "h": 30
+      },
+      "text_snippet": "",
+      "total_child_count": 0,
+      "style_summary": {
+        "background": "rgba(0, 0, 0, 0)",
+        "boxShadow": "",
+        "opacity": "1"
+      }
+    },
+    {
+      "key": "id:14_807553",
+      "id": "14_807553",
+      "bbox": {
+        "x": 237,
+        "y": 738,
+        "w": 30,
+        "h": 30
+      },
+      "text_snippet": "",
+      "total_child_count": 2,
+      "style_summary": {
+        "background": "rgba(0, 0, 0, 0)",
+        "boxShadow": "",
+        "opacity": "1"
+      }
+    },
+    {
+      "key": "id:14_807554",
+      "id": "14_807554",
+      "bbox": {
+        "x": 237,
+        "y": 738,
+        "w": 30,
+        "h": 30
+      },
+      "text_snippet": "",
+      "total_child_count": 0,
+      "style_summary": {
+        "background": "rgba(0, 0, 0, 0)",
+        "boxShadow": "",
+        "opacity": "1"
+      }
+    },
+    {
+      "key": "id:14_807555",
+      "id": "14_807555",
+      "bbox": {
+        "x": 242,
+        "y": 743,
+        "w": 20,
+        "h": 20
+      },
+      "text_snippet": "",
+      "total_child_count": 0,
+      "style_summary": {
+        "background": "rgba(0, 0, 0, 0)",
+        "boxShadow": "",
+        "opacity": "1"
+      }
+    },
+    {
+      "key": "id:14_807558",
+      "id": "14_807558",
+      "bbox": {
+        "x": 309,
+        "y": 738,
+        "w": 30,
+        "h": 30
+      },
+      "text_snippet": "",
+      "total_child_count": 2,
+      "style_summary": {
+        "background": "rgba(0, 0, 0, 0)",
+        "boxShadow": "",
+        "opacity": "1"
+      }
+    },
+    {
+      "key": "id:14_807559",
+      "id": "14_807559",
+      "bbox": {
+        "x": 309,
+        "y": 738,
+        "w": 30,
+        "h": 30
+      },
+      "text_snippet": "",
+      "total_child_count": 0,
+      "style_summary": {
+        "background": "rgba(0, 0, 0, 0)",
+        "boxShadow": "",
+        "opacity": "1"
+      }
+    },
+    {
+      "key": "id:14_807560",
+      "id": "14_807560",
+      "bbox": {
+        "x": 314,
+        "y": 743,
+        "w": 21,
+        "h": 21
+      },
+      "text_snippet": "",
+      "total_child_count": 2,
+      "style_summary": {
+        "background": "rgba(0, 0, 0, 0)",
+        "boxShadow": "",
+        "opacity": "1"
+      }
+    },
+    {
+      "key": "id:14_807561",
+      "id": "14_807561",
+      "bbox": {
+        "x": 314,
+        "y": 743,
+        "w": 21,
+        "h": 21
+      },
+      "text_snippet": "",
+      "total_child_count": 0,
+      "style_summary": {
+        "background": "rgba(0, 0, 0, 0)",
+        "boxShadow": "",
+        "opacity": "1"
+      }
+    },
+    {
+      "key": "id:14_807564",
+      "id": "14_807564",
+      "bbox": {
+        "x": 319,
+        "y": 750,
+        "w": 7,
+        "h": 3
+      },
+      "text_snippet": "",
+      "total_child_count": 0,
+      "style_summary": {
+        "background": "rgba(0, 0, 0, 0)",
+        "boxShadow": "",
+        "opacity": "1"
+      }
+    },
+    {
+      "key": "id:14_807567",
+      "id": "14_807567",
+      "bbox": {
+        "x": 0,
+        "y": 0,
+        "w": 360,
+        "h": 792
+      },
+      "text_snippet": "",
+      "total_child_count": 0,
+      "style_summary": {
+        "background": "rgba(0, 0, 0, 0.294)",
+        "boxShadow": "",
+        "opacity": "1"
+      }
+    },
+    {
+      "key": "id:14_807568",
+      "id": "14_807568",
+      "bbox": {
+        "x": 16,
+        "y": 289,
+        "w": 328,
+        "h": 156
+      },
+      "text_snippet": "创建开局 创建项目集 接收项目 项目开局",
+      "total_child_count": 3,
+      "style_summary": {
+        "background": "rgba(0, 0, 0, 0)",
+        "boxShadow": "",
+        "opacity": "1"
+      }
+    },
+    {
+      "key": "id:146_161458",
+      "id": "146_161458",
+      "bbox": {
+        "x": 16,
+        "y": 289,
+        "w": 328,
+        "h": 156
+      },
+      "text_snippet": "",
+      "total_child_count": 0,
+      "style_summary": {
+        "background": "rgb(255, 255, 255)",
+        "boxShadow": "",
+        "opacity": "1"
+      }
+    },
+    {
+      "key": "id:146_161459",
+      "id": "146_161459",
+      "bbox": {
+        "x": 28,
+        "y": 329,
+        "w": 304,
+        "h": 104
+      },
+      "text_snippet": "创建开局 创建项目集 接收项目",
+      "total_child_count": 1,
+      "style_summary": {
+        "background": "rgba(0, 0, 0, 0)",
+        "boxShadow": "",
+        "opacity": "1"
+      }
+    },
+    {
+      "key": "auto:9",
+      "id": null,
+      "bbox": {
+        "x": 28,
+        "y": 329,
+        "w": 304,
+        "h": 104
+      },
+      "text_snippet": "创建开局 创建项目集 接收项目",
+      "total_child_count": 3,
+      "style_summary": {
+        "background": "rgba(0, 0, 0, 0)",
+        "boxShadow": "",
+        "opacity": "1"
+      }
+    },
+    {
+      "key": "id:146_161460",
+      "id": "146_161460",
+      "bbox": {
+        "x": 28,
+        "y": 329,
+        "w": 96,
+        "h": 104
+      },
+      "text_snippet": "创建开局",
+      "total_child_count": 1,
+      "style_summary": {
+        "background": "rgb(247, 247, 247)",
+        "boxShadow": "",
+        "opacity": "1"
+      }
+    },
+    {
+      "key": "auto:10",
+      "id": null,
+      "bbox": {
+        "x": 28,
+        "y": 329,
+        "w": 96,
+        "h": 104
+      },
+      "text_snippet": "创建开局",
+      "total_child_count": 2,
+      "style_summary": {
+        "background": "rgba(0, 0, 0, 0)",
+        "boxShadow": "",
+        "opacity": "1"
+      }
+    },
+    {
+      "key": "id:146_161484",
+      "id": "146_161484",
+      "bbox": {
+        "x": 132,
+        "y": 329,
+        "w": 96,
+        "h": 104
+      },
+      "text_snippet": "创建项目集",
+      "total_child_count": 1,
+      "style_summary": {
+        "background": "rgb(247, 247, 247)",
+        "boxShadow": "",
+        "opacity": "1"
+      }
+    },
+    {
+      "key": "auto:11",
+      "id": null,
+      "bbox": {
+        "x": 132,
+        "y": 329,
+        "w": 96,
+        "h": 104
+      },
+      "text_snippet": "创建项目集",
+      "total_child_count": 2,
+      "style_summary": {
+        "background": "rgba(0, 0, 0, 0)",
+        "boxShadow": "",
+        "opacity": "1"
+      }
+    },
+    {
+      "key": "id:146_161509",
+      "id": "146_161509",
+      "bbox": {
+        "x": 236,
+        "y": 329,
+        "w": 96,
+        "h": 104
+      },
+      "text_snippet": "接收项目",
+      "total_child_count": 1,
+      "style_summary": {
+        "background": "rgb(247, 247, 247)",
+        "boxShadow": "",
+        "opacity": "1"
+      }
+    },
+    {
+      "key": "auto:12",
+      "id": null,
+      "bbox": {
+        "x": 236,
+        "y": 329,
+        "w": 96,
+        "h": 104
+      },
+      "text_snippet": "接收项目",
+      "total_child_count": 2,
+      "style_summary": {
+        "background": "rgba(0, 0, 0, 0)",
+        "boxShadow": "",
+        "opacity": "1"
+      }
+    },
+    {
+      "key": "id:146_161520",
+      "id": "146_161520",
+      "bbox": {
+        "x": 28,
+        "y": 289,
+        "w": 304,
+        "h": 40
+      },
+      "text_snippet": "项目开局",
+      "total_child_count": 1,
+      "style_summary": {
+        "background": "rgba(0, 0, 0, 0)",
+        "boxShadow": "",
+        "opacity": "1"
+      }
+    },
+    {
+      "key": "auto:13",
+      "id": null,
+      "bbox": {
+        "x": 28,
+        "y": 289,
+        "w": 304,
+        "h": 40
+      },
+      "text_snippet": "项目开局",
+      "total_child_count": 1,
+      "style_summary": {
+        "background": "rgba(0, 0, 0, 0)",
+        "boxShadow": "",
+        "opacity": "1"
+      }
+    },
+    {
+      "key": "id:146_161521",
+      "id": "146_161521",
+      "bbox": {
+        "x": 28,
+        "y": 301,
+        "w": 64,
+        "h": 20
+      },
+      "text_snippet": "项目开局",
+      "total_child_count": 1,
+      "style_summary": {
+        "background": "rgba(0, 0, 0, 0)",
+        "boxShadow": "",
+        "opacity": "1"
+      }
+    }
+  ]
+}

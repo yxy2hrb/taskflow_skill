@@ -708,6 +708,13 @@ function buildSemanticAnchors(registry) {
 
 }
 
+// HTML void elements must not be pushed onto the tag stack; treating `<br>` etc.
+// as open tags corrupts parent resolution when text nodes contain `<br><br>`.
+const VOID_HTML_TAGS = new Set([
+  "area", "base", "br", "col", "embed", "hr", "img", "input",
+  "link", "meta", "param", "source", "track", "wbr",
+]);
+
 function parseParentById(html) {
   const tokenRe = /<\/?([a-zA-Z0-9-]+)([^>]*)>/g;
   const stack = [];
@@ -728,7 +735,8 @@ function parseParentById(html) {
       const parent = [...stack].reverse().find((item) => item.id);
       parentById[id] = parent ? parent.id : null;
     }
-    if (!full.endsWith("/>")) stack.push({ tag, id });
+    const selfClosing = full.endsWith("/>") || VOID_HTML_TAGS.has(tag);
+    if (!selfClosing) stack.push({ tag, id: id || null });
   }
   return parentById;
 }

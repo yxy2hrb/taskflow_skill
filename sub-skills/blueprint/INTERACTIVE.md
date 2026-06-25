@@ -170,7 +170,7 @@ next
 ```bash
 node .cursor/skills/taskflow-llm-pagegen/sub-skills/blueprint/scripts/run_skill.js auto \
   --dirs new_test/2 \
-  --model qwen3.7-max
+  --model $TEXT_MODEL
 ```
 
 auto 模式不进入终端编号交互，行为保持不变。

@@ -203,7 +203,9 @@ async function main() {
     else if (args[i] === "--depth") { forcedDepth = parseInt(args[++i], 10); }
     else if (!inputDir) { inputDir = args[i]; }
   }
-  if (!inputDir) inputDir = "E:/任务流/任务流/p2p/new_test/1";
+  if (!inputDir) {
+    throw new Error("Usage: node build_div_bbox.js <inputDir> [--html <path>] [--out <dir>] [--width W] [--height H]");
+  }
   const htmlPath = htmlPathOverride || path.join(inputDir, "html", "Index.original.html");
   const imagePath = path.join(inputDir, "wps_doc_0.png");
   const resultDir = resultDirOverride || path.join(inputDir, ".result_bbox");

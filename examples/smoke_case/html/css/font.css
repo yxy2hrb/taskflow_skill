@@ -1,0 +1,25 @@
+
+@font-face {
+  font-family: 'HarmonyOS Sans SC-Regular';
+  font-style: normal;
+  font-weight: 400;
+  src: url(../font/HarmonyOS_Sans_SC_Regular_1.ttf) format(truetype);
+}
+
+		
+@font-face {
+  font-family: 'HarmonyOS Sans SC-Bold';
+  font-style: normal;
+  font-weight: 700;
+  src: url(../font/HarmonyOS_Sans_SC_Bold_1.ttf) format(truetype);
+}
+
+		
+@font-face {
+  font-family: 'HarmonyOS Sans SC-Medium';
+  font-style: normal;
+  font-weight: 500;
+  src: url(../font/HarmonyOS_Sans_SC_Medium_1.ttf) format(truetype);
+}
+
+		

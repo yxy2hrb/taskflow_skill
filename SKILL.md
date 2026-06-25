@@ -3,112 +3,46 @@ name: taskflow-llm-pagegen
 description: >
   Runs the self-contained taskflow pipeline that generates static taskflow pages
   from state_implementation_model with an LLM. Use when generating pages from
-  new_test cases with preprocessing, blueprint creation, state implementation
-  modeling, and LLM-authored static state layers.
+  case directories with preprocessing, blueprint creation, state implementation
+  modeling, and static state layers.
 ---
 
 # Taskflow LLM Pagegen
 
-Top-level orchestration skill for the latest taskflow pipeline.
+自包含编排 skill：prompt、组件库、runner 均在 **本目录**内。
 
-It is self-contained: use only files under this skill directory.
+详细运行说明、环境变量、分阶段命令见 **[README.md](./README.md)**。
 
-## Entry
-
-```bash
-node .cursor/skills/taskflow-llm-pagegen/scripts/run_skill.js new_test/2 --model qwen3.7-max
-```
-
-Unified input form:
+## 快速开始
 
 ```bash
-node .cursor/skills/taskflow-llm-pagegen/scripts/run_skill.js new_test/2 --image new_test/2/wps_doc_0.png --html new_test/2/html/Index.original.html --input new_test/2/input.txt --width 360 --height 792
+# 0. 安装依赖（仅 skill 内 node_modules）
+npm install
+npx playwright install chromium
+
+# 1. 配置 API Key
+cp .env.example .env   # 配置 DASHSCOPE_API_KEY、TEXT_MODEL、VISION_MODEL
+
+# 2. 全流程（默认 code_gen2 + blueprint auto）
+node scripts/run_skill.js examples/smoke_case --width 360 --height 792
 ```
 
-Switch code generation implementation:
+## 默认行为
 
-```bash
-node .cursor/skills/taskflow-llm-pagegen/scripts/run_skill.js new_test/2 --width 360 --height 792 --codegen code_gen2
-```
+- `--codegen code_gen2`（React 组件 + SSR + page-layer 注入）
+- `--blueprint-mode auto`（全自动蓝图，无需分阶段 confirm）
+- page-layer 默认 **rule-only**（不加 `--llm`）且 **关闭 auto-fit**
 
-Inputs:
+## 子 skill
 
-- `--image`: source screenshot path. Used to infer viewport size when `--width/--height` are omitted.
-- `--html`: source D2C HTML path.
-- `--input`: taskflow brief text path.
-- `--width`: optional viewport width. Width is locked throughout generation.
-- `--height`: optional initial viewport height. Generated pages may be taller if content does not fit.
-- `--codegen`: optional codegen implementation. Use `codegen` for the default
-  static pipeline or `code_gen2` for the React-first component pipeline.
+1. `sub-skills/preprocess` — bbox、语义标注、semantic_registry
+2. `sub-skills/blueprint` — 四阶段任务流蓝图
+3. `sub-skills/code_gen2` — state model、component codegen、page layer（默认）
 
-The top-level runner only coordinates sub-skills and writes the final run report.
+旧版 `sub-skills/codegen` 仍可通过 `--codegen codegen` 选用。
 
-## Sub-skill Structure
+## 约束
 
-1. `sub-skills/preprocess`
-   - Generates `spec.json` page DSL from the source screenshot when missing.
-   - Collects div bbox data.
-   - Generates div semantic annotations.
-   - Replaces HTML body with semantic comments.
-   - Builds `semantic_registry.json` and `semantic_anchors.js`.
-
-2. `sub-skills/blueprint`
-   - Generates the taskflow blueprint in four phases.
-   - Uses nested prompt sub-skills:
-     - `sub-skills/blueprint/sub-skills/user-story/SKILL.md`
-     - `sub-skills/blueprint/sub-skills/state-enumeration/SKILL.md`
-     - `sub-skills/blueprint/sub-skills/implementation-plan/SKILL.md`
-     - `sub-skills/blueprint/sub-skills/blueprint-builder/SKILL.md`
-
-3. `sub-skills/codegen` or `sub-skills/code_gen2`
-   - Generates state implementation model.
-   - Generates components and static page layers.
-   - Performs HTML post-processing and screenshot validation.
-   - Selected by `--codegen codegen|code_gen2`.
-   - Uses nested prompt sub-skills:
-     - `sub-skills/codegen/sub-skills/state-implementation-model/SKILL.md`
-     - `sub-skills/codegen/sub-skills/page-layer/SKILL.md`
-     - `sub-skills/code_gen2/sub-skills/state-implementation-model/SKILL.md`
-     - `sub-skills/code_gen2/sub-skills/component-codegen/SKILL.md`
-     - `sub-skills/code_gen2/sub-skills/page-layer/SKILL.md`
-
-## Outputs
-
-- `.run_skill/<stamp>/preprocess`
-- `spec.json` when the input case does not already provide page DSL
-- `.run_skill/<stamp>/blueprint`
-- `.run_skill/<stamp>/state_implementation`
-- `.run_skill/<stamp>/llm_layer_codegen`
-- `html/Index.state-model.llm-layers.html`
-
-## Prompt vs Rule Boundary
-
-Prompt-driven:
-
-- Preprocess semantic annotation prompt inside `sub-skills/preprocess/scripts/run_preprocess.js`.
-- Blueprint phase 1-3 prompt sub-skills.
-- State implementation model prompt sub-skill.
-- Page layer prompt sub-skill.
-
-Rule-driven:
-
-- Playwright bbox collection.
-- Semantic registry construction.
-- Blueprint phase4 merge.
-- State model normalization and validation.
-- Page-layer JSON validation.
-- Keep-placeholder fill.
-- HTML assembly.
-- Playwright screenshot validation.
-
-## Constraints
-
-- Do not call repository-root `scripts/*.js`.
-- Do not call old taskflow codegen skills.
-- Do not use legacy patch, rule-based layer codegen, interactive codegen, or auto-interaction codegen.
-- The final page layers are generated by an LLM from `state_implementation_model.llm.json`.
-- React + Ant Design are used as component-design reference, but the runnable output is static HTML/CSS layers for reliable local screenshot validation.
-- Interaction flow is out of scope for this skill version; validate static state screenshots only.
-- For `--codegen code_gen2`, use only scripts and resources under
-  `sub-skills/code_gen2` plus the shared top-level skill scripts. Do not depend
-  on external app source folders or repository-root legacy codegen scripts.
+- 不依赖 skill 目录外的脚本或 `backend/.env`；npm 依赖仅来自本目录 `node_modules`。
+- 路径参数支持相对（相对 cwd）与绝对路径。
+- `.env` 放在本 skill 根目录。

@@ -5,6 +5,8 @@ const fs = require("fs");
 const fsp = require("fs/promises");
 const path = require("path");
 const { chromium } = require("playwright");
+const { loadSkillEnv } = require("../../../../../scripts/paths");
+const { callJsonChat, resolveTextModel } = require("../../../../../scripts/llm_config");
 
 const ROOT = path.resolve(__dirname, "../../../../../../../..");
 
@@ -46,34 +48,8 @@ function extractJson(text) {
 }
 
 async function callLLM({ model, system, user, maxTokens }) {
-  loadDotEnv(path.join(ROOT, "backend", ".env"));
-  const apiKey = process.env.DASHSCOPE_API_KEY || process.env.OPENAI_API_KEY;
-  if (!apiKey) throw new Error("Missing DASHSCOPE_API_KEY or OPENAI_API_KEY");
-  const base = (process.env.DASHSCOPE_BASE_URL || "https://dashscope.aliyuncs.com/compatible-mode/v1").replace(/\/$/, "");
-  let lastErr;
-  for (let attempt = 1; attempt <= 4; attempt++) {
-    try {
-      const response = await fetch(base + "/chat/completions", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
-        body: JSON.stringify({
-          model,
-          messages: [{ role: "system", content: system }, { role: "user", content: user }],
-          temperature: 0.2,
-          max_tokens: maxTokens,
-          response_format: { type: "json_object" },
-        }),
-      });
-      const body = await response.text();
-      if (!response.ok) throw new Error(`LLM HTTP ${response.status}: ${body.slice(0, 1000)}`);
-      const json = JSON.parse(body);
-      return json.choices?.[0]?.message?.content || "";
-    } catch (err) {
-      lastErr = err;
-      if (attempt < 4) await new Promise((resolve) => setTimeout(resolve, attempt * 3000));
-    }
-  }
-  throw lastErr;
+  loadSkillEnv();
+  return callJsonChat({ model, system, user, maxTokens, label: "page-layer" });
 }
 
 function slimRegistry(registry) {
@@ -413,7 +389,7 @@ async function screenshotStates({ htmlPath, blueprint, model, outDir, width, hei
 async function main() {
   const args = process.argv.slice(2);
   const base = path.resolve(ROOT, args[0] || ".");
-  const modelName = argValue(args, "--model", "qwen3.7-max");
+  const modelName = resolveTextModel(argValue(args, "--model", ""));
   const htmlPath = path.resolve(ROOT, argValue(args, "--html", path.join(base, ".run_skill/latest/preprocess/Index.preprocessed.html")));
   const registryPath = path.resolve(ROOT, argValue(args, "--registry", path.join(base, ".run_skill/latest/preprocess/semantic_registry.json")));
   const stateModelPath = path.resolve(ROOT, argValue(args, "--state-model", path.join(base, ".run_skill/latest/state_implementation/state_implementation_model.llm.json")));

@@ -174,6 +174,18 @@ For these components:
 9. For content-driven cards with `layout.heightMode: "auto"`, do not force a
    fixed page-positioned height. Render the natural content height. Page-layer
    will place the component.
+10. Fill-width children must NOT be placed side-by-side in a horizontal flex row.
+    Any imported child whose `layout_context.child_should_fill_parent` is true
+    renders with `width: 100%` and fills the parent content width. If two such
+    children share one `display:flex` / `flex-direction:row` line, their
+    `width:100%` bases overflow the row and a `flex:1` sibling collapses to ~0
+    width, so its text wraps one character per line (broken vertical text). Stack
+    fill-width children VERTICALLY (one per line / `flex-direction:column`). Only
+    if the design needs a label and a compact badge/status on the SAME line, do
+    not use two raw fill-width children there: render the compact inline content
+    yourself, or wrap each child in an explicit flex item that overrides the
+    width — the flexible one `flex: 1 1 0; min-width: 0`, the compact one
+    `flex: 0 0 auto` with `width: auto`.
 
 ## Floating Surface Output Contract
 

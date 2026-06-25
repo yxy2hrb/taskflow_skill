@@ -17,14 +17,12 @@ blueprint + semantic_registry
 ```
 
 All prompts, local component references, CSS tokens, SSR shims, runner scripts,
-and validation logic for these stages live under:
-
-```text
-.cursor/skills/taskflow-llm-pagegen/sub-skills/code_gen2/
-```
+and validation logic for these stages live under this `code_gen2` directory
+(relative to the `taskflow-llm-pagegen` skill root).
 
 The only required external inputs are case files and prior pipeline outputs:
-preprocessed HTML, semantic registry, blueprint, and viewport values.
+preprocessed HTML, semantic registry, blueprint, and viewport values. API keys
+live in `<skill>/.env` (see [`../../README.md`](../../README.md)).
 
 ## Stage 1: State Implementation Model
 
@@ -200,51 +198,61 @@ code_gen2_llm_layer_codegen/auto_shots/state_layers_report.json
 
 ## Running code_gen2 End To End
 
+默认已启用 `code_gen2` + `blueprint auto`。在 skill 目录的**上级任意 cwd** 执行（路径支持绝对/相对）：
+
 ```bash
-node .cursor/skills/taskflow-llm-pagegen/scripts/run_skill.js new_test/13 \
-  --model qwen3.7-max \
-  --codegen code_gen2 \
+node taskflow-llm-pagegen/scripts/run_skill.js /path/to/case \
   --width 360 \
-  --height 936
+  --height 792
 ```
 
+环境变量：复制 skill 根目录 ` .env.example` → `.env`，配置 `DASHSCOPE_API_KEY`。详见 [`../../README.md`](../../README.md)。
+
 ## Running Individual code_gen2 Stages
+
+路径参数支持**绝对路径**或**相对当前 cwd**。`<caseDir>` 为案例根目录。
 
 State model:
 
 ```bash
-node .cursor/skills/taskflow-llm-pagegen/sub-skills/code_gen2/sub-skills/state-implementation-model/scripts/run_skill.js new_test/13 \
-  --model qwen3.7-max \
-  --blueprint new_test/13/.run_skill/<stamp>/blueprint/phase4/stages/blueprint_builder_input.json \
-  --registry new_test/13/.run_skill/<stamp>/preprocess/semantic_registry.json \
-  --out new_test/13/.run_skill/<stamp>/state_implementation/state_implementation_model.llm.json \
-  --width 360 \
-  --height 936
+node taskflow-llm-pagegen/sub-skills/code_gen2/sub-skills/state-implementation-model/scripts/run_skill.js \
+  /path/to/case \
+  --blueprint /path/to/run/blueprint/stages/blueprint_builder_input.json \
+  --registry /path/to/run/preprocess/semantic_registry.json \
+  --out /path/to/run/state_implementation/state_implementation_model.llm.json \
+  --width 360 --height 792
 ```
 
 Component codegen:
 
 ```bash
-node .cursor/skills/taskflow-llm-pagegen/sub-skills/code_gen2/sub-skills/component-codegen/scripts/run_skill.js new_test/13 \
-  --model qwen3.7-max \
-  --state-model new_test/13/.run_skill/<stamp>/state_implementation/state_implementation_model.llm.json \
-  --out-dir new_test/13/.run_skill/<stamp>/code_gen2_component_codegen \
-  --width 360 \
-  --height 936
+node taskflow-llm-pagegen/sub-skills/code_gen2/sub-skills/component-codegen/scripts/run_skill.js \
+  /path/to/case \
+  --state-model /path/to/run/state_implementation/state_implementation_model.llm.json \
+  --registry /path/to/run/preprocess/semantic_registry.json \
+  --out-dir /path/to/run/code_gen2_component_codegen \
+  --width 360 --height 792
 ```
 
-Page layer:
+Page layer（默认 rule-only、无 auto-fit；需 LLM 占位层时加 `--llm`）:
 
 ```bash
-node .cursor/skills/taskflow-llm-pagegen/sub-skills/code_gen2/sub-skills/page-layer/scripts/run_skill.js new_test/13 \
-  --model qwen3.7-max \
-  --html new_test/13/.run_skill/<stamp>/preprocess/Index.preprocessed.html \
-  --registry new_test/13/.run_skill/<stamp>/preprocess/semantic_registry.json \
-  --state-model new_test/13/.run_skill/<stamp>/state_implementation/state_implementation_model.llm.json \
-  --blueprint new_test/13/.run_skill/<stamp>/blueprint/phase4/stages/blueprint_builder_input.json \
-  --component-codegen new_test/13/.run_skill/<stamp>/code_gen2_component_codegen/component_codegen.generated.json \
-  --out-dir new_test/13/.run_skill/<stamp>/code_gen2_llm_layer_codegen \
-  --out-html new_test/13/html/Index.state-model.code-gen2-layers.html \
-  --width 360 \
-  --height 936
+node taskflow-llm-pagegen/sub-skills/code_gen2/sub-skills/page-layer/scripts/run_skill.js \
+  /path/to/case \
+  --html /path/to/run/preprocess/Index.preprocessed.html \
+  --registry /path/to/run/preprocess/semantic_registry.json \
+  --state-model /path/to/run/state_implementation/state_implementation_model.llm.json \
+  --blueprint /path/to/run/blueprint/stages/blueprint_builder_input.json \
+  --component-codegen /path/to/run/code_gen2_component_codegen/component_codegen.generated.json \
+  --out-dir /path/to/run/code_gen2_llm_layer_codegen \
+  --out-html /path/to/case/html/Index.state-model.code-gen2-layers.html \
+  --width 360 --height 792
+```
+
+从已有 state model 重跑 codegen + page-layer：
+
+```bash
+node taskflow-llm-pagegen/scripts/rerun_from_state_model.js \
+  /path/to/case/.run_skill/<stamp> \
+  --width 360 --height 792
 ```

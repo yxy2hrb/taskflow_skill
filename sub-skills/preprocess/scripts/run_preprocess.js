@@ -16,10 +16,15 @@
 const fs = require("fs");
 const path = require("path");
 const { spawnSync } = require("child_process");
-
-const BUILD_BBOX_SCRIPT = path.join(__dirname, "build_div_bbox.js");
-const REPLACE_BODY_SCRIPT = path.join(__dirname, "replace_body.py");
-const DEFAULT_DASHSCOPE_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1";
+const { loadSkillEnv, configureNodePath, resolveArgPath } = require("../../../scripts/paths");
+const {
+  callChatCompletions,
+  getApiKey,
+  getTextModel,
+  getVisionModel,
+  getModelTemperature,
+  getModelSeed,
+} = require("../../../scripts/llm_config");
 
 function readUtf8(p) { return fs.readFileSync(p, "utf8"); }
 function writeUtf8(p, s) { fs.writeFileSync(p, s, "utf8"); }
@@ -50,25 +55,8 @@ function imageToDataUrl(file) {
   return `data:image/${mime};base64,${buf.toString("base64")}`;
 }
 
-async function callDashScopeChat(apiKey, payload, label) {
-  const baseUrl = (process.env.DASHSCOPE_BASE_URL || DEFAULT_DASHSCOPE_BASE_URL).replace(/\/$/, "");
-  let lastErr;
-  for (let attempt = 1; attempt <= 4; attempt++) {
-    try {
-      const resp = await fetch(baseUrl + "/chat/completions", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: "Bearer " + apiKey },
-        body: JSON.stringify(payload),
-      });
-      const body = await resp.text();
-      if (!resp.ok) throw new Error(label + " HTTP " + resp.status + ": " + body.slice(0, 1000));
-      return JSON.parse(body);
-    } catch (err) {
-      lastErr = err;
-      if (attempt < 4) await new Promise((resolve) => setTimeout(resolve, attempt * 3000));
-    }
-  }
-  throw lastErr;
+async function callDashScopeChat(payload, label) {
+  return callChatCompletions(payload, { label });
 }
 
 function getChatMessageContent(data) {
@@ -85,8 +73,8 @@ function getChatMessageContent(data) {
   return "";
 }
 
-async function generateSpecWithQwenVl(apiKey, imagePath) {
-  if (!apiKey) throw new Error("Missing DASHSCOPE_API_KEY/QWEN_API_KEY for spec.json generation");
+async function generateSpecWithQwenVl(imagePath) {
+  getApiKey();
   if (!fs.existsSync(imagePath)) throw new Error("spec.json not found and screenshot not found: " + imagePath);
 
   const specExample = {
@@ -169,7 +157,7 @@ async function generateSpecWithQwenVl(apiKey, imagePath) {
   ].join("\n");
 
   const payload = {
-    model: "qwen-vl-max",
+    model: getVisionModel(),
     messages: [
       {
         role: "user",
@@ -179,15 +167,15 @@ async function generateSpecWithQwenVl(apiKey, imagePath) {
         ],
       },
     ],
-    temperature: Number(process.env.MODEL_TEMPERATURE ?? 0),
-    seed: Number(process.env.MODEL_SEED ?? 42),
+    temperature: getModelTemperature(),
+    seed: getModelSeed(),
     max_tokens: 2400,
     response_format: { type: "json_object" },
   };
 
-  const data = await callDashScopeChat(apiKey, payload, "Qwen VL");
+  const data = await callDashScopeChat(payload, "vision-model");
   const parsed = tryParseJson(getChatMessageContent(data));
-  if (!parsed || Array.isArray(parsed)) throw new Error("Qwen VL returned non-object JSON");
+  if (!parsed || Array.isArray(parsed)) throw new Error("Vision model returned non-object JSON");
   return parsed;
 }
 
@@ -311,18 +299,18 @@ function refineOverlappingSemantics(items) {
   return out;
 }
 
-async function callQwen(apiKey, model, prompt) {
+async function callSemanticAnnotator(prompt) {
   const payload = {
-    model: model,
+    model: getTextModel(),
     messages: [{ role: "user", content: prompt }],
-    temperature: Number(process.env.MODEL_TEMPERATURE ?? 0),
-    seed: Number(process.env.MODEL_SEED ?? 42),
+    temperature: getModelTemperature(),
+    seed: getModelSeed(),
     max_tokens: 12000,
     response_format: { type: "json_object" },
   };
-  const data = await callDashScopeChat(apiKey, payload, "Qwen");
+  const data = await callDashScopeChat(payload, "text-model");
   const txt = getChatMessageContent(data);
-  if (!txt) throw new Error("Qwen returned no text");
+  if (!txt) throw new Error("Text model returned no content");
   return txt;
 }
 
@@ -400,7 +388,10 @@ function removeMaskAnnotatedDivs(bodyHtml, semanticItems, bboxItems) {
 }
 
 async function main() {
+  loadSkillEnv();
+  configureNodePath();
   const args = process.argv.slice(2);
+  const cwd = process.cwd();
   let inputDir = null, htmlPathArg = null, imagePathArg = null, outputDirArg = null;
   let widthArg = null, heightArg = null;
   for (let i = 0; i < args.length; i++) {
@@ -416,22 +407,21 @@ async function main() {
     process.exit(1);
   }
 
-  const htmlPath = htmlPathArg || path.join(inputDir, "html", "Index.original.html");
+  inputDir = resolveArgPath(inputDir, cwd);
+  const htmlPath = htmlPathArg ? resolveArgPath(htmlPathArg, cwd) : path.join(inputDir, "html", "Index.original.html");
   const specPath = path.join(inputDir, "spec.json");
-  const imagePath = imagePathArg || path.join(inputDir, "wps_doc_0.png");
+  const imagePath = imagePathArg ? resolveArgPath(imagePathArg, cwd) : path.join(inputDir, "wps_doc_0.png");
   const bboxDir = path.join(inputDir, ".result_bbox");
-  const outputDir = outputDirArg || path.join(inputDir, ".preprocess");
+  const outputDir = outputDirArg ? resolveArgPath(outputDirArg, cwd) : path.join(inputDir, ".preprocess");
   ensureDir(outputDir);
 
-  const apiKey = process.env.DASHSCOPE_API_KEY || process.env.QWEN_API_KEY;
-
-  console.log("=== pre-process pipeline ===");
-  console.log("  inputDir : " + inputDir);
-  console.log("  htmlPath : " + htmlPath);
-  console.log("  imagePath: " + imagePath);
-  console.log("  outputDir: " + outputDir);
-  if (widthArg && heightArg) console.log("  viewport : " + widthArg + "x" + heightArg + " (explicit)");
-  if (!apiKey) console.warn("  [WARN] no QWEN_API_KEY - Stage0/Stage2 LLM calls may be skipped or fail");
+  let apiKey = null;
+  try {
+    loadSkillEnv();
+    apiKey = getApiKey();
+  } catch (_) {
+    console.warn("  [WARN] no DASHSCOPE_API_KEY - Stage0/Stage2 LLM calls may be skipped or fail");
+  }
 
   const viewportW = widthArg || "360";
   const viewportH = heightArg || "792";
@@ -445,18 +435,18 @@ async function main() {
       const invalidSpec = readUtf8(specPath);
       writeUtf8(path.join(outputDir, "spec.invalid.txt"), invalidSpec);
       console.warn("\n[Stage 0] existing spec.json is invalid JSON; regenerating from screenshot");
-      spec = await generateSpecWithQwenVl(apiKey, imagePath);
+      spec = await generateSpecWithQwenVl(imagePath);
       writeUtf8(specPath, JSON.stringify(spec, null, 2));
       writeUtf8(path.join(outputDir, "spec.generated.json"), JSON.stringify(spec, null, 2));
-      specSource = "qwen-vl-max";
+      specSource = getVisionModel();
       console.log("[Stage 0] regenerated -> " + specPath);
     }
   } else {
-    console.log("\n[Stage 0] spec.json missing, generating from screenshot with Qwen VL ...");
-    spec = await generateSpecWithQwenVl(apiKey, imagePath);
+    console.log("\n[Stage 0] spec.json missing, generating from screenshot with vision model ...");
+    spec = await generateSpecWithQwenVl(imagePath);
     writeUtf8(specPath, JSON.stringify(spec, null, 2));
     writeUtf8(path.join(outputDir, "spec.generated.json"), JSON.stringify(spec, null, 2));
-    specSource = "qwen-vl-max";
+    specSource = getVisionModel();
     console.log("[Stage 0] done -> " + specPath);
   }
   writeUtf8(path.join(outputDir, "spec.used.json"), JSON.stringify(spec, null, 2));
@@ -489,7 +479,7 @@ async function main() {
     annotatedBodySemantic = annotatedBodyBbox;
     if (!apiKey) break;
 
-    console.log("\n[Stage 2] calling Qwen for semantic annotation (attempt " + (attempt + 1) + ") ...");
+    console.log("\n[Stage 2] calling text model for semantic annotation (attempt " + (attempt + 1) + ") ...");
     const divBbox = bboxJson.div_bbox || [];
     const body = extractBlock(readUtf8(htmlPath), "body");
     const divsInfo = divBbox.map(function(d) {
@@ -545,8 +535,8 @@ async function main() {
     ].join("\n");
 
     try {
-      const txt = await callQwen(apiKey, "qwen3.7-max", prompt);
-      writeUtf8(path.join(outputDir, "qwen_semantic.attempt" + (attempt + 1) + ".raw.txt"), txt);
+      const txt = await callSemanticAnnotator(prompt);
+      writeUtf8(path.join(outputDir, "semantic.attempt" + (attempt + 1) + ".raw.txt"), txt);
       const parsed = tryParseJson(txt);
       const normalizedItems = normalizeSemanticItems(parsed);
       if (normalizedItems.length > 0) {
@@ -558,7 +548,7 @@ async function main() {
         semanticValidation = validateSemanticCoverage(coveredItems, spec);
         semanticItems = coveredItems;
         annotatedBodySemantic = removeMaskAnnotatedDivs(annotateBodySemantic(annotatedBodyBbox, coveredItems), coveredItems, divBbox);
-        semanticSource = "qwen";
+        semanticSource = getTextModel();
         const cnt = coveredItems.filter(function(x) { return x.use_for_annotation !== false; }).length;
         stageAttempts.push({ attempt: attempt + 1, bboxDir: attemptDir, annotated: cnt, validation: semanticValidation, coverage_check: normalized.coverage_check });
         console.log("[Stage 2] done, annotated divs: " + cnt + ", missing targets: " + semanticValidation.missing.join(","));
@@ -566,12 +556,12 @@ async function main() {
         if (attempt === 2) break;
         console.warn("[Stage 2] annotated div count < 3, retrying with depth+1 ...");
       } else {
-        console.warn("[Stage 2] could not parse Qwen output, skipping");
+        console.warn("[Stage 2] could not parse model output, skipping");
         stageAttempts.push({ attempt: attempt + 1, bboxDir: attemptDir, error: "parse_failed" });
         if (attempt === 2) break;
       }
     } catch(e) {
-      console.warn("[Stage 2] Qwen failed: " + e.message);
+      console.warn("[Stage 2] semantic annotation failed: " + e.message);
       stageAttempts.push({ attempt: attempt + 1, bboxDir: attemptDir, error: e.message });
       if (attempt === 2) break;
     }

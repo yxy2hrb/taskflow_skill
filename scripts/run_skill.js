@@ -6,27 +6,18 @@ const fsp = require("fs/promises");
 const path = require("path");
 const { spawnSync } = require("child_process");
 const { injectStateKeyNavIntoFile } = require("./inject_state_key_nav");
+const {
+  SKILL_ROOT,
+  loadSkillEnv,
+  configureNodePath,
+  resolveArgPath,
+  relFromCwd,
+  exists,
+} = require("./paths");
+const { resolveTextModel } = require("./llm_config");
 
-const ROOT = path.resolve(__dirname, "../../../..");
-const SKILL_ROOT = path.resolve(__dirname, "..");
 const PREPROCESS_DIR = path.join(SKILL_ROOT, "sub-skills", "preprocess");
 const BLUEPRINT_DIR = path.join(SKILL_ROOT, "sub-skills", "blueprint");
-
-function configureWorkspaceNodePath() {
-  const backendNodeModules = path.join(ROOT, "backend", "node_modules");
-  if (!exists(backendNodeModules)) return;
-  const entries = String(process.env.NODE_PATH || "").split(path.delimiter).filter(Boolean);
-  if (!entries.includes(backendNodeModules)) entries.unshift(backendNodeModules);
-  process.env.NODE_PATH = entries.join(path.delimiter);
-}
-
-function rel(file) {
-  return path.relative(ROOT, file).replace(/\\/g, "/");
-}
-
-function exists(file) {
-  return fs.existsSync(file);
-}
 
 function readJson(file) {
   return JSON.parse(fs.readFileSync(file, "utf8"));
@@ -96,19 +87,6 @@ function resolveInput(inputDir) {
   return hit;
 }
 
-function loadDotEnv(file) {
-  if (!exists(file)) return;
-  for (const line of fs.readFileSync(file, "utf8").split(/\r?\n/)) {
-    const match = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)\s*$/);
-    if (!match) continue;
-    let value = match[2].trim();
-    if ((value.startsWith("\"") && value.endsWith("\"")) || (value.startsWith("'") && value.endsWith("'"))) {
-      value = value.slice(1, -1);
-    }
-    if (process.env[match[1]] == null) process.env[match[1]] = value;
-  }
-}
-
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -116,7 +94,7 @@ function sleep(ms) {
 async function runNode(args, label, maxAttempts = 3) {
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     console.log(`[taskflow-llm-pagegen] ${label}${attempt > 1 ? ` (retry ${attempt})` : ""}`);
-    const result = spawnSync(process.execPath, args, { cwd: ROOT, stdio: "inherit", env: process.env });
+    const result = spawnSync(process.execPath, args, { cwd: process.cwd(), stdio: "inherit", env: process.env });
     if (result.status === 0) return;
     if (attempt < maxAttempts) await sleep(attempt * 5000);
     else throw new Error(`${label} failed with exit ${result.status}`);
@@ -132,77 +110,51 @@ function blueprintSessionInfo(sessionDir, mode) {
     : `phase${session.current_phase}_ask.json`;
   const pendingFile = path.join(sessionDir, "stages", pendingName);
   const finalFile = path.join(sessionDir, "stages", "blueprint_builder_input.json");
-  const blueprintRunner = ".cursor/skills/taskflow-llm-pagegen/sub-skills/blueprint/scripts/run_skill.js";
+  const blueprintRunner = path.join(BLUEPRINT_DIR, "scripts", "run_skill.js");
   let nextAction = null;
   if (session.status === "awaiting_confirm") {
-    nextAction = `node ${blueprintRunner} confirm --session-dir ${rel(sessionDir)} --phase ${session.current_phase} --input <feedback.json>`;
+    nextAction = `node ${blueprintRunner} confirm --session-dir ${sessionDir} --phase ${session.current_phase} --input <feedback.json>`;
   } else if (session.status === "idle") {
-    nextAction = `node ${blueprintRunner} resume --session-dir ${rel(sessionDir)}`;
+    nextAction = `node ${blueprintRunner} resume --session-dir ${sessionDir}`;
   } else if (session.status === "completed") {
     nextAction = "continue state-implementation-model and codegen";
   }
   return {
     mode,
-    session_dir: rel(sessionDir),
+    session_dir: sessionDir,
     status: session.status,
     current_phase: session.current_phase,
     completed_phases: session.completed_phases || [],
-    pending_view: exists(pendingFile) ? rel(pendingFile) : null,
-    final_output: exists(finalFile) ? rel(finalFile) : null,
+    pending_view: exists(pendingFile) ? pendingFile : null,
+    final_output: exists(finalFile) ? finalFile : null,
     next_action: nextAction,
   };
 }
 
-function writeAwaitingBlueprintReport({
-  report,
-  runDir,
-  preprocessOut,
-  registryPath,
-  anchorsPath,
-  blueprint,
-}) {
-  const preprocessReportPath = path.join(preprocessOut, "report.json");
-  const registry = exists(registryPath) ? readJson(registryPath) : {};
-  const preprocessReport = exists(preprocessReportPath) ? readJson(preprocessReportPath) : {};
-  report.pipeline_status = "awaiting_blueprint_confirm";
-  report.blueprint = blueprint;
-  report.outputs = {
-    run_dir: rel(runDir),
-    preprocess_dir: rel(preprocessOut),
-    preprocessed_html: rel(path.join(preprocessOut, "Index.preprocessed.html")),
-    page_dsl: rel(path.join(preprocessOut, "spec.used.json")),
-    semantic_registry: rel(registryPath),
-    semantic_anchors: rel(anchorsPath),
-    blueprint_session: blueprint.session_dir,
-    blueprint_pending_view: blueprint.pending_view,
-  };
-  report.checks = {
-    preprocess_ok: preprocessReport.ok === true,
-    semantic_anchor_count: Object.keys(registry.semantic_dom_registry || {}).length,
-    blueprint_completed: false,
-  };
-  writeJson(path.join(runDir, "run_report.json"), report);
-  console.log(
-    `[taskflow-llm-pagegen] paused status=${blueprint.status} phase=${blueprint.current_phase} run_dir=${rel(runDir)}`,
-  );
-}
-
 async function main() {
-  configureWorkspaceNodePath();
+  loadSkillEnv();
+  configureNodePath();
+
   const args = process.argv.slice(2);
+  const cwd = process.cwd();
   const targetArg = args.find((arg) => !arg.startsWith("--"));
   const htmlArg = argValue(args, "--html", "");
   const imageArg = argValue(args, "--image", "");
   const inputArg = argValue(args, "--input", "");
   if (!targetArg && (!htmlArg || !inputArg)) {
-    throw new Error("Usage: node .cursor/skills/taskflow-llm-pagegen/scripts/run_skill.js <inputDir> [--image image.png] [--html Index.original.html] [--input input.txt] [--width W --height H] [--codegen codegen|code_gen2] [--blueprint-mode interactive|auto] [--blueprint-session-dir <path>]");
+    throw new Error(
+      "Usage: node scripts/run_skill.js <caseDir> [--html <path>] [--input <path>] [--image <png>] "
+      + "[--width W --height H] [--codegen code_gen2|codegen] [--blueprint-mode auto|interactive] "
+      + "[--blueprint-session-dir <path>] [--stamp <id>]\n"
+      + "Paths may be absolute or relative to the current working directory.",
+    );
   }
 
-  loadDotEnv(path.join(SKILL_ROOT, ".env"));
-  loadDotEnv(path.join(ROOT, "backend", ".env"));
-  const inputDir = path.resolve(ROOT, targetArg || path.dirname(path.dirname(path.resolve(ROOT, htmlArg))));
+  const inputDir = targetArg
+    ? resolveArgPath(targetArg, cwd)
+    : path.dirname(path.dirname(resolveArgPath(htmlArg, cwd)));
   const blueprintSessionArg = argValue(args, "--blueprint-session-dir", "");
-  const explicitBlueprintSession = blueprintSessionArg ? path.resolve(ROOT, blueprintSessionArg) : "";
+  const explicitBlueprintSession = blueprintSessionArg ? resolveArgPath(blueprintSessionArg, cwd) : "";
   const explicitRunDir = explicitBlueprintSession ? path.dirname(explicitBlueprintSession) : "";
   const runStamp = argValue(args, "--stamp", explicitRunDir ? path.basename(explicitRunDir) : stamp());
   const runDir = explicitRunDir || path.join(inputDir, ".run_skill", runStamp);
@@ -211,15 +163,17 @@ async function main() {
   const existingManifest = exists(existingManifestPath) ? readJson(existingManifestPath) : {};
   const existingSessionPath = path.join(blueprintOut, "session.json");
   const existingSession = exists(existingSessionPath) ? readJson(existingSessionPath) : {};
-  const model = argValue(args, "--model", existingSession.model || existingManifest.model || "qwen3.7-max");
-  const codegenName = argValue(args, "--codegen", existingManifest.codegen || "codegen");
+  const model = resolveTextModel(
+    argValue(args, "--model", existingSession.model || existingManifest.model || ""),
+  );
+  const codegenName = argValue(args, "--codegen", existingManifest.codegen || "code_gen2");
   const codegenDir = resolveCodegenDir(codegenName);
   const codegenPrefix = codegenName === "code_gen2" ? "code_gen2_" : "";
   const blueprintMode = resolveBlueprintMode(
-    argValue(args, "--blueprint-mode", existingManifest.blueprint_mode || existingSession.mode || "interactive"),
+    argValue(args, "--blueprint-mode", existingManifest.blueprint_mode || existingSession.mode || "auto"),
   );
-  const manifestImage = existingManifest.image_path ? path.resolve(ROOT, existingManifest.image_path) : "";
-  const imagePath = imageArg ? path.resolve(ROOT, imageArg) : manifestImage;
+  const manifestImage = existingManifest.image_path ? resolveArgPath(existingManifest.image_path, cwd) : "";
+  const imagePath = imageArg ? resolveArgPath(imageArg, cwd) : manifestImage;
   const inferredSize = readPngSize(imagePath);
   const width = argValue(
     args,
@@ -236,20 +190,21 @@ async function main() {
       : (inferredSize ? String(inferredSize.height) : "792"),
   );
   const htmlPath = htmlArg
-    ? path.resolve(ROOT, htmlArg)
-    : (existingManifest.html_path ? path.resolve(ROOT, existingManifest.html_path) : resolveHtml(inputDir));
+    ? resolveArgPath(htmlArg, cwd)
+    : (existingManifest.html_path ? resolveArgPath(existingManifest.html_path, cwd) : resolveHtml(inputDir));
   const inputPath = inputArg
-    ? path.resolve(ROOT, inputArg)
-    : (existingManifest.input_txt_path ? path.resolve(ROOT, existingManifest.input_txt_path) : resolveInput(inputDir));
+    ? resolveArgPath(inputArg, cwd)
+    : (existingManifest.input_txt_path ? resolveArgPath(existingManifest.input_txt_path, cwd) : resolveInput(inputDir));
+
   await fsp.mkdir(runDir, { recursive: true });
   writeJson(path.join(runDir, "input_manifest.json"), {
-    image_path: imagePath ? rel(imagePath) : null,
-    html_path: rel(htmlPath),
-    input_txt_path: rel(inputPath),
+    image_path: imagePath || null,
+    html_path: htmlPath,
+    input_txt_path: inputPath,
     model,
     codegen: codegenName,
     blueprint_mode: blueprintMode,
-    blueprint_session_dir: rel(blueprintOut),
+    blueprint_session_dir: blueprintOut,
     viewport: {
       width: Number(width),
       initial_height: Number(height),
@@ -260,7 +215,7 @@ async function main() {
 
   const report = {
     ok: false,
-    input_dir: rel(inputDir),
+    input_dir: inputDir,
     model,
     codegen: codegenName,
     blueprint_mode: blueprintMode,
@@ -281,37 +236,37 @@ async function main() {
   if (!preprocessRequired.every(exists)) {
     const preprocessArgs = [
       path.join(PREPROCESS_DIR, "scripts", "run_preprocess.js"),
-      rel(inputDir),
-      "--html", rel(htmlPath),
-      "--out", rel(preprocessOut),
+      inputDir,
+      "--html", htmlPath,
+      "--out", preprocessOut,
       "--width", width,
       "--height", height,
     ];
-    if (imagePath) preprocessArgs.push("--image", rel(imagePath));
+    if (imagePath) preprocessArgs.push("--image", imagePath);
     await runNode(preprocessArgs, "preprocess");
   } else {
-    console.log(`[taskflow-llm-pagegen] reuse preprocess ${rel(preprocessOut)}`);
+    console.log(`[taskflow-llm-pagegen] reuse preprocess ${relFromCwd(preprocessOut)}`);
   }
 
   if (!exists(registryPath) || !exists(anchorsPath)) {
     await runNode([
       path.join(PREPROCESS_DIR, "scripts", "build_semantic_registry.js"),
-      "--input", rel(path.join(preprocessOut, "annotated_body_semantic.html")),
-      "--out", rel(registryPath),
-      "--js-out", rel(anchorsPath),
+      "--input", path.join(preprocessOut, "annotated_body_semantic.html"),
+      "--out", registryPath,
+      "--js-out", anchorsPath,
     ], "semantic registry");
   } else {
-    console.log(`[taskflow-llm-pagegen] reuse semantic registry ${rel(registryPath)}`);
+    console.log(`[taskflow-llm-pagegen] reuse semantic registry ${relFromCwd(registryPath)}`);
   }
 
   const blueprintRunner = path.join(BLUEPRINT_DIR, "scripts", "run_skill.js");
   const blueprintSessionFile = path.join(blueprintOut, "session.json");
   if (exists(blueprintSessionFile)) {
-    const existingSession = readJson(blueprintSessionFile);
-    const sessionSourceDir = path.resolve(ROOT, existingSession.source_dir || "");
+    const session = readJson(blueprintSessionFile);
+    const sessionSourceDir = resolveArgPath(session.source_dir || "", cwd);
     if (sessionSourceDir !== inputDir) {
       throw new Error(
-        `Blueprint session source mismatch: expected ${rel(inputDir)}, got ${existingSession.source_dir || "<missing>"}`,
+        `Blueprint session source mismatch: expected ${inputDir}, got ${session.source_dir || "<missing>"}`,
       );
     }
   }
@@ -320,11 +275,11 @@ async function main() {
       await runNode([
         blueprintRunner,
         "auto",
-        "--dirs", rel(inputDir),
-        "--session-dir", rel(blueprintOut),
+        "--dirs", inputDir,
+        "--session-dir", blueprintOut,
         "--model", model,
-        "--input", rel(inputPath),
-        "--page-dsl", rel(path.join(preprocessOut, "spec.used.json")),
+        "--input", inputPath,
+        "--page-dsl", path.join(preprocessOut, "spec.used.json"),
       ], "blueprint auto");
     }
   } else {
@@ -332,11 +287,11 @@ async function main() {
       await runNode([
         blueprintRunner,
         "init",
-        "--dirs", rel(inputDir),
-        "--session-dir", rel(blueprintOut),
+        "--dirs", inputDir,
+        "--session-dir", blueprintOut,
         "--model", model,
-        "--input", rel(inputPath),
-        "--page-dsl", rel(path.join(preprocessOut, "spec.used.json")),
+        "--input", inputPath,
+        "--page-dsl", path.join(preprocessOut, "spec.used.json"),
       ], "blueprint init", 3);
     }
     while (true) {
@@ -346,7 +301,7 @@ async function main() {
         await runNode([
           blueprintRunner,
           "generate",
-          "--session-dir", rel(blueprintOut),
+          "--session-dir", blueprintOut,
           "--phase", String(session.current_phase),
         ], `blueprint phase${session.current_phase} generate`, 3);
         session = readJson(blueprintSessionFile);
@@ -355,31 +310,31 @@ async function main() {
         await runNode([
           blueprintRunner,
           "confirm",
-          "--session-dir", rel(blueprintOut),
+          "--session-dir", blueprintOut,
           "--phase", String(session.current_phase),
           "--no-view",
         ], `blueprint phase${session.current_phase} confirm`, 3);
         continue;
       }
-      throw new Error(`Blueprint session cannot continue from status ${session.status}: ${rel(blueprintSessionFile)}`);
+      throw new Error(`Blueprint session cannot continue from status ${session.status}: ${blueprintSessionFile}`);
     }
   }
 
   const blueprint = blueprintSessionInfo(blueprintOut, blueprintMode);
   if (!blueprint || blueprint.status !== "completed") {
-    throw new Error(`Blueprint session did not complete: ${rel(blueprintSessionFile)}`);
+    throw new Error(`Blueprint session did not complete: ${blueprintSessionFile}`);
   }
   const blueprintInputPath = path.join(blueprintOut, "stages", "blueprint_builder_input.json");
-  if (!exists(blueprintInputPath)) throw new Error(`Missing completed blueprint: ${rel(blueprintInputPath)}`);
+  if (!exists(blueprintInputPath)) throw new Error(`Missing completed blueprint: ${blueprintInputPath}`);
 
   const stateOut = path.join(runDir, "state_implementation", "state_implementation_model.llm.json");
   await runNode([
     path.join(codegenDir, "sub-skills", "state-implementation-model", "scripts", "run_skill.js"),
-    rel(inputDir),
+    inputDir,
     "--model", model,
-    "--blueprint", rel(blueprintInputPath),
-    "--registry", rel(registryPath),
-    "--out", rel(stateOut),
+    "--blueprint", blueprintInputPath,
+    "--registry", registryPath,
+    "--out", stateOut,
     "--width", width,
     "--height", height,
   ], "state implementation model");
@@ -388,11 +343,11 @@ async function main() {
   const componentGenerated = path.join(componentOut, "component_codegen.generated.json");
   await runNode([
     path.join(codegenDir, "sub-skills", "component-codegen", "scripts", "run_skill.js"),
-    rel(inputDir),
+    inputDir,
     "--model", model,
-    "--state-model", rel(stateOut),
-    "--registry", rel(registryPath),
-    "--out-dir", rel(componentOut),
+    "--state-model", stateOut,
+    "--registry", registryPath,
+    "--out-dir", componentOut,
     "--width", width,
     "--height", height,
   ], `${codegenName} component codegen`);
@@ -401,15 +356,15 @@ async function main() {
   const llmLayerHtml = path.join(inputDir, "html", codegenName === "code_gen2" ? "Index.state-model.code-gen2-layers.html" : "Index.state-model.llm-layers.html");
   await runNode([
     path.join(codegenDir, "sub-skills", "page-layer", "scripts", "run_skill.js"),
-    rel(inputDir),
+    inputDir,
     "--model", model,
-    "--html", rel(path.join(preprocessOut, "Index.preprocessed.html")),
-    "--registry", rel(registryPath),
-    "--state-model", rel(stateOut),
-    "--blueprint", rel(blueprintInputPath),
-    "--component-codegen", rel(componentGenerated),
-    "--out-dir", rel(llmLayerOut),
-    "--out-html", rel(llmLayerHtml),
+    "--html", path.join(preprocessOut, "Index.preprocessed.html"),
+    "--registry", registryPath,
+    "--state-model", stateOut,
+    "--blueprint", blueprintInputPath,
+    "--component-codegen", componentGenerated,
+    "--out-dir", llmLayerOut,
+    "--out-html", llmLayerHtml,
     "--width", width,
     "--height", height,
   ], `${codegenName} static state layers`);
@@ -427,21 +382,21 @@ async function main() {
   const layerReport = readJson(path.join(llmLayerOut, "run_report.json"));
 
   report.outputs = {
-    run_dir: rel(runDir),
+    run_dir: runDir,
     codegen: codegenName,
-    preprocess_dir: rel(preprocessOut),
-    preprocessed_html: rel(path.join(preprocessOut, "Index.preprocessed.html")),
-    page_dsl: rel(path.join(preprocessOut, "spec.used.json")),
-    semantic_registry: rel(registryPath),
-    semantic_anchors: rel(anchorsPath),
-    blueprint_session: rel(blueprintOut),
-    blueprint: rel(blueprintInputPath),
-    state_implementation_model: rel(stateOut),
-    component_codegen: rel(componentGenerated),
-    page_layer_input: rel(path.join(llmLayerOut, "page_layer_input.json")),
-    llm_layer_html: rel(llmLayerHtml),
-    llm_layer_dir: rel(llmLayerOut),
-    state_layers_report: rel(path.join(llmLayerOut, "auto_shots", "state_layers_report.json")),
+    preprocess_dir: preprocessOut,
+    preprocessed_html: path.join(preprocessOut, "Index.preprocessed.html"),
+    page_dsl: path.join(preprocessOut, "spec.used.json"),
+    semantic_registry: registryPath,
+    semantic_anchors: anchorsPath,
+    blueprint_session: blueprintOut,
+    blueprint: blueprintInputPath,
+    state_implementation_model: stateOut,
+    component_codegen: componentGenerated,
+    page_layer_input: path.join(llmLayerOut, "page_layer_input.json"),
+    llm_layer_html: llmLayerHtml,
+    llm_layer_dir: llmLayerOut,
+    state_layers_report: path.join(llmLayerOut, "auto_shots", "state_layers_report.json"),
     postprocess,
   };
   report.checks = {
@@ -465,7 +420,7 @@ async function main() {
   report.blueprint = blueprint;
 
   writeJson(path.join(runDir, "run_report.json"), report);
-  console.log(`[taskflow-llm-pagegen] done ok=${report.ok} run_dir=${rel(runDir)}`);
+  console.log(`[taskflow-llm-pagegen] done ok=${report.ok} run_dir=${runDir}`);
   if (!report.ok) process.exitCode = 2;
 }
 

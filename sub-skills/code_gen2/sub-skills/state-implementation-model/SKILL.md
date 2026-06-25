@@ -44,14 +44,13 @@ Return strict JSON only:
       "ui_intent": "what the user should see",
       "height": 792,
       "parent_state": null,
-      "trigger": null,
       "inheritance": {
         "keep": [],
         "create": [],
         "update": []
       },
       "data_state": {},
-      "patches": []
+      "triggers": []
     }
   ],
   "validation_notes": []
@@ -70,8 +69,8 @@ Return strict JSON only:
 - Do not output `inheritance.hide`.
 - Do not output `inheritance.replace`.
 - Do not output hide or replace patches.
-- `patches` is only for explicit interaction bindings when needed, especially
-  `bind` patches.
+- Do not output a `patches` field. All interaction/transition is expressed by
+  each state's outbound `triggers` array (see "Triggers (Outbound Transitions)").
 - A top-level create patch must include `type: "create"`, `id`, `component`,
   visible content fields when applicable, and either fixed `bbox` or weak
   `layout` hints. Ordinary page cards should use weak layout hints; fixed
@@ -125,10 +124,39 @@ Return strict JSON only:
   Only output `layout`/`bbox` on an update patch when the placement actually
   changes in this state, and record that change in `modifications`. Never let
   an updated input/card/button fall back to the top-left of the page.
+- ORIGINAL DOM ANCHOR PLACEMENT CHANGES MUST BE CONCRETE. When an update patch
+  whose `id` is an original DOM anchor (a `semantic_registry` key) changes that
+  anchor's position OR size (move up/down, widen half→full, shrink, grow), the
+  patch MUST express the new placement as a concrete pixel `bbox` — either a
+  top-level `patch.bbox` of `[x, y, w, h]`, or a self-targeted `set_bbox`
+  modification (`target: "bbox"`, `parent: <the anchor id>`, `set_bbox: [x, y,
+  w, h]`). A semantic `layout.widthHint` (e.g. `"full-width"`) ALONE is NOT
+  enough for an original anchor: the original anchor already owns a fixed
+  registry bbox, so without a concrete new bbox the runner keeps the OLD size
+  and the change is lost (e.g. a card asked to expand half→full stays half
+  width). Compute the new bbox from the registry bbox of the anchor and its
+  intended band: full-width content is `x≈16, w≈viewport.width-32`; keep the
+  anchor's `y` unless it also moves; set `h` to fit the new content (you may
+  grow it). You MAY still include `layout.widthHint` as a human-readable hint,
+  but the authoritative value the runner uses is the concrete `bbox`/`set_bbox`.
+  This requirement applies ONLY to original DOM anchors; brand-new virtual cards
+  with no registry bbox may continue to use weak `layout` hints.
+- ORIGINAL DOM ANCHOR UPDATES MUST NOT USE VIRTUAL COMPONENT FIELDS. Never put
+  `component`, `layout`, `content_density`, or top-level `props` on an update
+  patch whose `id` is an original `semantic_registry` anchor. Those fields are
+  for virtual components created via `inheritance.create`. For an original
+  anchor, express EVERY change through `modifications` (and optional `children`
+  when inserting virtual sub-components such as skeleton rows or meeting items).
+  Content switches (skeleton → list, card widen + new rows) are NOT simple text
+  swaps: describe them in `modifications` with `set_props` / `type:"create"`
+  child entries and/or a `children` array; component-codegen will read the
+  registry anchor as `original_reference` and regenerate replacement HTML.
+  Light-only changes (rename text, recolor an icon, move bbox) may use
+  `set_text`, `set_props:{color}`, or `set_bbox` alone.
 - IDs embedded inside structured props, such as `props.footer.primaryId`,
   `props.body[].id`, or an input descriptor inside `BottomSheet.props.body`, do
-  not create standalone virtual components. A later state must not `trigger`,
-  `keep`, or `update` those ids directly. If an internal control must be
+  not create standalone virtual components. A later state must not use those ids
+  as a `trigger.anchor`, `keep`, or `update` directly. If an internal control must be
   updated later, either model it as a real child patch under the container or
   update the owning container component itself.
 - An `inheritance.update` target id MUST be a TOP-LEVEL component: either an
@@ -154,42 +182,50 @@ There are two valid anchor namespaces:
 `keep` and `update` may reference either namespace. If referencing a virtual
 anchor, it must have been created by an earlier state.
 
-## Trigger Semantics
+## Triggers (Outbound Transitions)
 
-- `trigger` describes how the user or system enters the current state from the
-  previous state.
-- `state_1` is the initial state and its `trigger` must be `null` unless the
-  blueprint explicitly models an external return entry. Do not put the first
-  visible user action, such as tapping a search/filter/card button, on
-  `state_1.trigger`; put that outbound interaction in `state_1.patches` as a
-  `bind` patch.
-- `state_1` MUST NOT create or update components. It is the original captured
-  page rendered from app-root, and page-layer does not render its create/update
-  patches — so any bind to a state_1-created component is dead and the
-  transition will not work. A `state_1.patches[].bind` anchor must be an
-  ORIGINAL DOM anchor from `semantic_registry` (e.g. the real "搜索图标-…"
-  anchor that already exists on the page), never a newly created virtual id.
-  Do not create a new IconButton/etc. on state_1 just to bind it.
-- For every non-`state_1` click/tap trigger, make the inbound destination
-  explicit with `goto` equal to the current state's own `id`, for example
-  `{ "action": "click", "anchor": "搜索图标", "goto": "state_2" }`.
-- If `trigger.action` uses `goto:state_N`, `state_N` must equal the current
-  state's own `id`. A state's inbound trigger must not point to the next state.
-- A state's `trigger.anchor` must be an original DOM anchor or a virtual anchor
-  created by an earlier state.
-- Do not set `trigger.anchor` to a component first created inside the current
-  state.
-- If interaction is available after the current state is rendered, such as back
-  button, confirm button, toast timeout, or card click, represent it as `bind`
-  patches in `patches`, not as the current state's inbound trigger.
-- For interactions inside a structured container prop, use the owning component
-  id as `trigger.anchor` and put the internal slot in `trigger.target`, such as
-  `{ "anchor": "edit_sheet", "target": "footer.primary" }`. Do not set
-  `trigger.anchor` to `btn_confirm_edit` unless `btn_confirm_edit` is a real
-  child patch created in a previous state.
-- `patches[].bind` describes outbound interactions available after the current
-  state is rendered. It must use an explicit `goto: "state_N"` target. Do not
-  rely on `action: "click"` alone to imply a target.
+Each state declares how it advances to the NEXT state(s) via a `triggers` array.
+A trigger is OUTBOUND: it lives on the state the user is currently looking at and
+points forward to the destination state. There are no `patches`.
+
+Each trigger object has ONLY these four fields:
+
+- `anchor`: the element the user interacts with to leave this state. It must be
+  visible in THIS state — an original DOM anchor from `semantic_registry`, or a
+  component this state or an earlier state created/kept. Omit `anchor` when
+  `action` is `"wait"`.
+- `action`: exactly one of:
+  - `"click"` — any tap / select / input interaction. Buttons, list items,
+    cards, icons, AND form inputs / radio / checkbox / options / search boxes
+    all use `"click"`. The prototype does NOT capture real text input or
+    gestures, so a long-press, drag, swipe, selection, or "fill the form" step
+    is each represented as a single `"click"` on its `anchor` (no real value is
+    entered; clicking the input/option is enough to advance).
+  - `"wait"` — an automatic, time-based transition that fires on its own after
+    this state is shown, with no user interaction (loading → loaded, submitting
+    → success, toast → auto-dismiss, splash → home). A `"wait"` trigger has no
+    `anchor` and no `target`.
+- `goto`: the destination state id this trigger advances to, e.g. `"state_3"`.
+  It must be a DIFFERENT, existing state (never the state's own id).
+- `target`: a natural-language description of the precise sub-element to bind
+  inside `anchor`, e.g. `"主按钮"`, `"「加入配单」按钮"`, `"列表中任意一个项目"`,
+  `"右上角关闭图标"`. It pinpoints which inner element of the anchor component
+  the click binds to. Omit for `"wait"`.
+
+Rules:
+
+- A state may have MULTIPLE triggers when it branches to several states (for
+  example a list page that can open a detail OR open a filter panel, or a drag
+  step that can also be saved from the bottom bar). List one trigger per
+  outbound edge.
+- A terminal state with no outgoing transition has `"triggers": []`.
+- `state_1` is the original captured page; its `triggers` describe the first
+  user action(s) on the captured page, and each `anchor` MUST be an original DOM
+  anchor from `semantic_registry`. `state_1` MUST NOT create or update
+  components, so never invent a new component on state_1 just to advance from
+  it.
+- Example: `{ "anchor": "bottom_action_bar", "action": "click", "goto": "state_4", "target": "「加入配单」主按钮" }`
+  and a `"wait"` example: `{ "action": "wait", "goto": "state_5" }`.
 
 ## Core Rules
 
@@ -271,15 +307,55 @@ implementation. Therefore every update patch must carry:
 
 - `modifications`: a non-empty array. Each entry is one concrete change inside
   the updated component:
-  - `target`: the changed part. Use a child patch id, a documented prop path
-    such as `props.primaryLabel`, a structured slot path such as
-    `footer.primary` or `body[1].quantity`, or the literal `text`,
-    `text_style`, `bbox`, or `layout`.
+  - `type`: `"update"` or `"create"`. Use `"update"` when changing a part that
+    already existed in the previous implementation. Use `"create"` when the
+    entry introduces a brand-new child component that did not exist before (only
+    a previously-rendered component may be updated; a new sub-component must be
+    created). Field targets (`text`, `props.*`, `bbox`, `layout`) are always
+    `"update"`. The renderer relies on this to regenerate the parent so a new
+    child is actually inserted; if omitted it is inferred, but always set it for
+    a new child.
+  - `target`: the changed part. Choose the format based on depth:
+
+    **Depth 1 — direct child or prop of the update-patch root:**
+    - A direct child component id: `"footer_bar"` (equivalent to `"children.footer_bar"`)
+    - A documented prop path: `"props.primaryLabel"`, `"props.title"`
+    - A structured slot path: `"footer.primary"`, `"body[1].quantity"`
+    - A literal field: `"text"`, `"text_style"`, `"bbox"`, `"layout"`
+
+    **Depth 2+ — a component nested inside a direct child:**
+    Use the full `children.` chain, alternating ids and the literal word
+    `children`:
+    ```
+    children.<level1Id>.children.<level2Id>
+    children.<level1Id>.children.<level2Id>.children.<level3Id>
+    ```
+    Examples:
+    - `"children.section_time.children.filter_time"` — `filter_time` inside
+      `section_time` inside the update-patch root
+    - `"children.card_body.children.price_row.children.price_tag"` — 3 levels deep
+
+    **Rules for nested paths:**
+    - Always start with `children.` when the target is a component (not a prop).
+    - Each component id in the path must exist as a `children` entry in the
+      previous spec of its direct parent; do not invent intermediate ids.
+    - The `parent` field must name the **direct** parent of the final target id.
+      For `"children.section_time.children.filter_time"`, `parent` is
+      `"section_time"`, NOT the update-patch root id.
+    - Do NOT write `"section_time.filter_time"` (missing `.children.` separator)
+      or `"filter_time"` alone (ambiguous when the same id appears at multiple
+      depths). Always use the full chain starting with `children.`.
+    - `set_props`, `set_text`, and `set_text_style` apply to the **final node**
+      in the path, not to intermediate containers.
+
   - `target_component`: the component name of the changed child/slot when the
     target is itself a component; omit for plain prop/text targets.
-  - `parent`: the id of the component that directly owns the changed part.
-    For top-level prop/text changes this is the update patch's own `id`; for a
-    nested child it is that child's direct parent id.
+  - `parent`: the id of the component that **directly owns** the changed part.
+    For top-level prop/text changes this is the update patch's own `id`. For a
+    nested child, set this to the immediate parent of the final target id — the
+    last intermediate id in the `children.` chain before the target. Example:
+    for `target: "children.section_time.children.filter_time"` set
+    `parent: "section_time"` (not the root `filter_sheet`).
   - `change`: a self-contained modification plan in natural language with
     before → after values when known, for example
     "主按钮文案从「保存」改为「保存中...」，同时 disabled=true 并显示 loading".
@@ -293,7 +369,7 @@ implementation. Therefore every update patch must carry:
   previous implementation: child ids, prop paths, `text`, `bbox`, or `layout`.
   List at least the visually important untouched parts.
 
-Example:
+Example — depth-1 props change:
 
 ```json
 {
@@ -303,24 +379,147 @@ Example:
   "bbox": [0, 872, 360, 64],
   "props": { "variant": "single-primary", "primaryLabel": "保存中...", "disabled": true, "loading": true },
   "modifications": [
-    { "target": "props.primaryLabel", "parent": "btn_save", "change": "主按钮文案从「保存」改为「保存中...」" },
-    { "target": "props.disabled", "parent": "btn_save", "change": "disabled 从 false 改为 true，提交中不可重复点击" },
-    { "target": "props.loading", "parent": "btn_save", "change": "新增 loading=true，按钮内显示加载圈" }
+    { "type": "update", "target": "props.primaryLabel", "parent": "btn_save", "change": "主按钮文案从「保存」改为「保存中...」", "set_props": { "primaryLabel": "保存中..." } },
+    { "type": "update", "target": "props.disabled",     "parent": "btn_save", "change": "disabled 从 false 改为 true",        "set_props": { "disabled": true } },
+    { "type": "update", "target": "props.loading",      "parent": "btn_save", "change": "新增 loading=true",                  "set_props": { "loading": true } }
   ],
   "preserve": ["bbox", "props.variant", "props.zIndex", "text_style"]
 }
 ```
+
+Example — depth-3 nested child change (BottomSheet → SectionLayout → FilterPills):
+
+```json
+{
+  "type": "update",
+  "id": "filter_sheet",
+  "component": "BottomSheet",
+  "modifications": [
+    {
+      "type": "update",
+      "target": "children.section_time.children.filter_time",
+      "parent": "section_time",
+      "target_component": "FilterPills",
+      "change": "Time 筛选项选中 'Latest to Earliest'",
+      "set_props": { "activeId": "latest" }
+    },
+    {
+      "type": "update",
+      "target": "children.footer_bar",
+      "parent": "filter_sheet",
+      "target_component": "ButtonBar",
+      "change": "Confirm 按钮由禁用态切换为可点击态",
+      "set_props": { "primaryDisabled": false }
+    }
+  ],
+  "preserve": ["bbox", "props.title", "props.showClose", "section_time", "section_popularity", "section_content"]
+}
+```
+
+Example — skeleton loading → loaded content (virtual children must be deleted):
+
+When a loading state created virtual skeleton children (`SkeletonBlock`,
+`SkeletonRow`, etc.) and a later state replaces them with real content, you
+**must** emit explicit `type: "delete"` modifications for every skeleton child
+id. Do **not** rely on omitting skeleton ids from `preserve` — the runner's
+`derivePreserve()` will auto-add untouched previous children back into
+`preserve`. Writing only `type: "create"` for the replacement cards while saying
+"replace skeleton" in `change` is not enough; the skeleton nodes will remain
+alongside the new content.
+
+```json
+{
+  "type": "update",
+  "id": "detail_skeleton",
+  "component": "SectionLayout",
+  "modifications": [
+    {
+      "type": "delete",
+      "target": "children.skel_stats_row",
+      "parent": "detail_skeleton",
+      "change": "加载完成，移除统计区骨架屏"
+    },
+    {
+      "type": "delete",
+      "target": "children.skel_topology",
+      "parent": "detail_skeleton",
+      "change": "加载完成，移除拓扑图骨架屏"
+    },
+    {
+      "type": "delete",
+      "target": "children.skel_list",
+      "parent": "detail_skeleton",
+      "change": "加载完成，移除列表骨架屏"
+    },
+    {
+      "type": "create",
+      "target": "children.wifi_score_card",
+      "parent": "detail_skeleton",
+      "target_component": "SectionLayout",
+      "change": "新增 Wi-Fi 评分数据卡片"
+    },
+    {
+      "type": "create",
+      "target": "children.uptime_card",
+      "parent": "detail_skeleton",
+      "target_component": "SectionLayout",
+      "change": "新增运行时长数据卡片"
+    }
+  ],
+  "preserve": ["layout", "props.variant", "props.title"],
+  "children": [
+    {
+      "type": "create",
+      "id": "wifi_score_card",
+      "component": "SectionLayout",
+      "props": { "variant": "card", "title": "Wi-Fi评分" }
+    },
+    {
+      "type": "create",
+      "id": "uptime_card",
+      "component": "SectionLayout",
+      "props": { "variant": "card", "title": "运行时长" }
+    }
+  ]
+}
+```
+
+The same rule applies when skeleton rows live under an **original DOM anchor**
+update (e.g. a todo card that temporarily shows `SkeletonRow` children): delete
+each `skeleton_row_*` id, then `create` the real list items. Also grow the
+card's concrete `bbox` / `set_bbox` height if the loaded list is taller than the
+skeleton placeholder layout.
 
 Rules:
 
 - `modifications` must cover every difference between the previous visible spec
   of this component and the current update patch. Anything not listed is
   implicitly preserved; do not change unlisted parts.
-- A `target` naming a child must reference a child that already exists in the
-  previous spec, unless the entry's `change` explicitly starts with "新增" to
-  mark a newly added child.
-- Removal is still forbidden (no hide/replace). To visually retire an internal
-  part, change its content or visibility props and describe that in `change`.
+- A `target` naming a child that already exists in the previous spec uses
+  `type: "update"`. A `target` naming a NEW child (not in the previous spec)
+  uses `type: "create"`, and that child must also appear in the patch's
+  `children` array so the renderer has its full spec to generate it.
+- A previously rendered **virtual child** that should disappear entirely (e.g.
+  skeleton rows replaced by real list items) uses `type: "delete"` with a
+  `children.<id>` target. `delete` applies to virtual sub-components only; never
+  delete the update patch's own top-level container id.
+- **Top-level removal is implicit — do not model it with `delete`.** When a
+  later state replaces the page or dismisses an overlay, retire whole components
+  by **omitting them from `inheritance.keep`** (see *Keep Scope: Replacement vs
+  Overlay* below) or by simply not creating them again. Do not output
+  `inheritance.hide` / `inheritance.replace`, and do not add `delete`
+  modifications against top-level create ids or original DOM card anchors. Only
+  **internal virtual children inside an update patch** may use `type: "delete"`.
+- For targets that reach into a deeply nested child, always write the full
+  `children.` chain (e.g. `"children.section_time.children.filter_time"`). Do
+  NOT abbreviate to just the leaf id (`"filter_time"`) — the renderer resolves
+  paths top-down and needs the full chain to correctly drill into the right
+  subtree. Setting `parent` to the immediate parent of the leaf (e.g.
+  `"section_time"`) is required and must match the second-to-last id in the
+  chain.
+- Do not "hide" a virtual child instead of deleting it when the loaded state
+  fully replaces that child with different content. Use `delete` + `create`, not
+  `preserve` on skeleton ids and not visibility-only hacks.
 - An update on original page content must target the CARD/CONTAINER level, not
   a leaf: `id` is the semantic unit being versioned (an information row, card,
   or list item anchor), and the changed leaf (for example a text anchor like
@@ -664,37 +863,48 @@ Use these defaults unless the component library reference says otherwise:
 - Small secondary copy: `font-caption-m`
 - Tiny tag/status copy: `font-caption-s`
 
-## Patch Types
+## Interaction Model
 
-- `bind`: connect an original or virtual anchor to `goto:state_N`
-- `keep`: do not use as a patch; put anchors in `inheritance.keep`
-- `create`: describe new UI to create; put patches in `inheritance.create`
-- `update`: update content/state of an anchor; put patches in
-  `inheritance.update`, each with an expanded `modifications` / `preserve`
-  change plan
+- All transitions between states are expressed by each state's outbound
+  `triggers` array (see "Triggers (Outbound Transitions)"). There is no
+  `patches` field and no `bind` / `hide` / `replace` patch types.
+- `inheritance` describes what the state shows; `triggers` describe how it
+  advances:
+  - `keep`: put anchor/component ids in `inheritance.keep`.
+  - `create`: describe new UI in `inheritance.create`.
+  - `update`: update content/state of an anchor/component in
+    `inheritance.update`, each with an expanded `modifications` / `preserve`
+    change plan.
 
 ## Validation Checklist
 
 - Every non-`state_1` state has `parent_state`.
-- `state_1.trigger` is `null`; first-screen outbound clicks are represented by
-  `state_1.patches[].bind`.
-- Every click/tap trigger on a non-initial state has `goto` equal to that
-  state's own `id`.
-- Every `bind` patch has an explicit `goto: "state_N"` target.
-- Every trigger anchor exists in original anchors or previous virtual anchors,
-  unless it is a system trigger such as `timeout`, `data_loaded`, or
-  `submit_success`.
+- Every state has a `triggers` array (terminal states may use `[]`); no
+  `patches` field is present.
+- Every trigger has `action` of `"click"` or `"wait"` and a `goto` pointing to a
+  different, existing state id.
+- Every `"click"` trigger has an `anchor` that exists in original anchors or a
+  component visible in this state; `"wait"` triggers omit `anchor`.
+- `state_1` triggers bind only original DOM anchors.
 - Every keep/update target exists in original anchors or previous virtual
   anchors.
 - Every update patch has a non-empty `modifications` array whose entries all
   include `target` and `change`, plus a `preserve` array for untouched parts.
+- Every modification `target` that reaches a component nested inside a direct
+  child uses the full `children.<id>.children.<id>` chain. The `parent` field
+  names the immediate parent of the final id in that chain.
 - No `inheritance.update` target id is a component that was created as a child
   inside a container; container-internal changes update the owning top-level
   container instead.
+- Every update patch on an ORIGINAL DOM anchor that changes the anchor's own
+  position or size carries a concrete `patch.bbox` or a self-targeted `set_bbox`
+  modification; it never relies on `layout.widthHint` alone to resize/move an
+  original anchor.
 - Every centered overlay container (`Dialog`/`Modal`/`Popover`) and card that
   carries `children` either sets `props.heightMode:"auto"` or provides a fixed
   bbox height large enough to contain header + body + footer.
 - Every non-modal create/update bbox avoids all kept bboxes for the state.
-- No `hide`, `replace`, `inheritance.hide`, or `inheritance.replace` is present.
+- No `patches`, `bind`, `hide`, `replace`, `inheritance.hide`, or
+  `inheritance.replace` is present.
 - No create visible text equals internal labels such as `state_2` or an internal
   Chinese state label ending with `态`.
